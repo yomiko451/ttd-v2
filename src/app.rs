@@ -15,7 +15,7 @@ use tui_input::{backend::crossterm::EventHandler, Input as InputBuffer};
 pub enum InputMode {
     #[default]
     Normal,
-    Editing,
+    Insert,
 }
 
 #[derive(Debug, Default)]
@@ -40,16 +40,16 @@ pub enum AppTab {
     Home,
     Todo,
     Info,
-    Help
+    About
 }
 
 impl AppTab {
     fn get_tab_list() -> Vec<String> {
         vec![
-            String::from("Home"),
-            String::from("Todo"),
-            String::from("Info"),
-            String::from("Help"),
+            String::from("Home(H)"),
+            String::from("Todo(T)"),
+            String::from("Info(I)"),
+            String::from("About(A)"),
         ]
     }
 }
@@ -57,8 +57,7 @@ impl AppTab {
 pub enum Message {
     AddTodo,
     TabChange(AppTab),
-    InputStart,
-    InputEnd,
+    InputModeChange(InputMode),
     SelectPrevious,
     SelectNext,
     Quit,
@@ -100,7 +99,7 @@ impl App {
                 self.render_todo_list_window(frame, layout[1]);
             }
             AppTab::Info => {}
-            AppTab::Help => {}
+            AppTab::About => {}
         }
     }
 
@@ -119,12 +118,11 @@ impl App {
                 let index = self.tab as usize;
                 self.tab_state.select(Some(index));
             }
-            Message::InputStart => {
+            Message::InputModeChange(input_mode) => {
                 if self.tab == AppTab::Todo {
-                    self.input.mode = InputMode::Editing;
+                    self.input.mode = input_mode;
                 }
             }
-            Message::InputEnd => self.input.mode = InputMode::Normal,
             Message::Quit => self.exit = true,
             Message::SelectPrevious => {
                 if let Some(index) = self.table_state.selected() {
@@ -152,11 +150,11 @@ impl App {
         None //TODO 状态机看看需不需要，不需要就删了精简代码
     }
     fn handle_events(&mut self) -> io::Result<Option<Message>> {
-        if let InputMode::Editing = self.input.mode {
+        if let InputMode::Insert = self.input.mode {
             match event::read()? {
                 Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
                     match key_event.code {
-                        KeyCode::Esc => return Ok(Some(Message::InputEnd)),
+                        KeyCode::Esc => return Ok(Some(Message::InputModeChange(InputMode::Normal))),
                         KeyCode::Enter => return Ok(Some(Message::AddTodo)),
                         _ => {
                             self.input.buffer.handle_event(&Event::Key(key_event));
@@ -174,7 +172,7 @@ impl App {
                         KeyCode::Esc => Some(Message::Quit),
                         KeyCode::Char('t') if self.tab != AppTab::Todo => Some(Message::TabChange(AppTab::Todo)),
                         KeyCode::Char('h') if self.tab != AppTab::Home => Some(Message::TabChange(AppTab::Home)),
-                        KeyCode::Char('i') if self.tab == AppTab::Todo => Some(Message::InputStart),
+                        KeyCode::Char('i') if self.tab == AppTab::Todo => Some(Message::InputModeChange(InputMode::Insert)),
                         KeyCode::Up if self.tab == AppTab::Todo => Some(Message::SelectPrevious),
                         KeyCode::Down if self.tab == AppTab::Todo => Some(Message::SelectNext),
                         _ => None,
@@ -223,21 +221,27 @@ impl App {
             .direction(Direction::Vertical)
             .constraints(vec![Constraint::Length(3), Constraint::Min(1)])
             .split(rect);
-        let title = Line::from(" InputEdit ").bold();
         let block = Block::bordered()
-            .title(title.centered())
+            .title(Line::from(" InputEdit ").bold().centered())
+            .title_bottom(
+                Line::from(vec![
+                    " InsertMode <I>".into(),
+                    " NormalMode <Esc>".into(),
+                    " AddItem <Enter> ".into()
+                ]).centered()
+            )
             .border_set(border::PLAIN);
         let width = rect.width.max(3) - 3;
         let scroll = self.input.buffer.visual_scroll(width.into());
         let input = Paragraph::new(self.input.buffer.value())
             .style(match self.input.mode {
                 InputMode::Normal => Style::default(),
-                InputMode::Editing => Style::default().fg(Color::Cyan),
+                InputMode::Insert => Style::default().fg(Color::Cyan),
             })
             .scroll((0, scroll as u16))
             .block(block);
         frame.render_widget(input, layout[0]);
-        if let InputMode::Editing = self.input.mode {
+        if let InputMode::Insert = self.input.mode {
             // Make the cursor visible and ask tui-rs to put it at the specified coordinates after rendering
             frame.set_cursor_position((
                 // Put cursor past the end of the input text
@@ -248,9 +252,14 @@ impl App {
                 layout[0].y + 1,
             ))
         };
-        let table_title = Line::from(" TodoList ").bold();
         let table_block = Block::bordered()
-            .title(table_title.centered())
+            .title(Line::from(" TodoList ").bold().centered())
+            .title_bottom(
+                Line::from(vec![
+                    " NextItem <Arrow Down>".into(),
+                    " PreviousItem <Arrow Up> ".into(),
+                ]).centered()
+            )
             .border_set(PLAIN);
         let table = self
             .todo_list
@@ -267,9 +276,10 @@ impl App {
             })
             .collect::<Table>()
             .header(
-                Row::new(vec!["Index", "Content", "Kind", "State", "CreatedAt"])
-                    .style(Style::new().bold())
-                    .bottom_margin(1),
+                Row::new(["Index", "Content", "Kind", "State", "CreatedAt"])
+                    .style(Style::new().bold().underlined())
+                    .top_margin(1)
+                    .bottom_margin(1)
             )
             .footer(Row::new([
                 format!("Total: {}", self.todo_list.len()),
