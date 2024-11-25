@@ -2,7 +2,6 @@ use std::io::Write;
 
 use chrono::{Datelike, NaiveDate, Weekday};
 use serde::{Serialize, Deserialize};
-use crate::app::STORE_PATH;
 
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -37,7 +36,7 @@ impl TodoState {
 pub enum TodoKind {
     #[default]
     General,
-    Progress(String),//TODO 这个怎么解析？
+    Progress(String),//TODO 怎么解析？用@符号？
     Week(Weekday),
     Month(u32),
     Once(NaiveDate),
@@ -71,7 +70,7 @@ impl Todo {
     fn input_parse(input: &str) -> (&str, TodoKind) {
         match input.split_once('-') {
             Some((text, suffix)) => {
-                if !suffix.is_empty() {
+                if !text.is_empty() && !suffix.is_empty() {
                     let todo_text = text.trim();
                     let suffix = suffix.trim();
                     let mut todo_kind = TodoKind::default();
@@ -89,13 +88,23 @@ impl Todo {
                         todo_kind = TodoKind::Once(date);
                         return (todo_text, todo_kind);
                     }
-                    (todo_text.trim(), todo_kind)
+                    (input.trim(), todo_kind)
     
                 } else {
-                    (text.trim(), TodoKind::default())
+                    (input.trim(), TodoKind::default())
                 }
             }
-            None => (input.trim(), TodoKind::default()),
+            None => {
+                match input.split_once('@') {
+                    Some((text, suffix)) if !text.is_empty() && !suffix.is_empty() => {
+                        let todo_text = text.trim();
+                        let suffix = suffix.trim();
+                        let todo_kind = TodoKind::Progress(suffix.to_string());
+                        (todo_text, todo_kind)
+                    }
+                    _ => (input.trim(), TodoKind::default())
+                }
+            }
         }
     }
 
@@ -126,20 +135,6 @@ impl Todo {
                 }
             }
             _ => {}
-        }
-    }
-
-    pub fn save(todo_list: &Vec<Todo>) {
-        let file = std::fs::OpenOptions::new().write(true).open(STORE_PATH.as_path()).unwrap();
-        serde_json::to_writer(file, todo_list).unwrap();
-    }
-
-    pub fn load() -> Vec<Todo> {
-        let file = std::fs::read(STORE_PATH.as_path()).unwrap();
-        if !file.is_empty() {
-            serde_json::from_slice(&file).unwrap()
-        } else {
-            vec![]
         }
     }
 }

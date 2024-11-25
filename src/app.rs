@@ -60,6 +60,7 @@ impl AppTab {
 
 pub enum Message {
     AddTodo,
+    DeleteTodo,
     TabChange(AppTab),
     InputModeChange(InputMode),
     SelectPrevious,
@@ -90,7 +91,7 @@ impl App {
         if !STORE_PATH.exists() {
             std::fs::File::create(STORE_PATH.as_path()).unwrap();
         }
-        self.todo_list = Todo::load();
+        self.load();
         self.tab_state.select_first();
         self.todo_list.iter_mut().for_each(Todo::state_check);
     }
@@ -120,9 +121,15 @@ impl App {
                 if !input.is_empty() {
                     let todo = Todo::new(input);
                     self.todo_list.push(todo);
-                    Todo::save(&self.todo_list);
+                    self.save();
                 }
                 self.input.buffer.reset();
+            }
+            Message::DeleteTodo => {
+                if let Some(index) = self.table_state.selected() {
+                    self.todo_list.remove(index);
+                    self.overwrite();
+                }
             }
             Message::TabChange(tab) => {
                 self.tab = tab;
@@ -183,6 +190,7 @@ impl App {
                         KeyCode::Char('q') => Some(Message::Quit),
                         KeyCode::Char('t') if self.tab != AppTab::Todo => Some(Message::TabChange(AppTab::Todo)),
                         KeyCode::Char('h') if self.tab != AppTab::Home => Some(Message::TabChange(AppTab::Home)),
+                        KeyCode::Char('d') if self.tab == AppTab::Todo => Some(Message::DeleteTodo),
                         KeyCode::Char('i') if self.tab == AppTab::Todo => Some(Message::InputModeChange(InputMode::Insert)),
                         KeyCode::Up if self.tab == AppTab::Todo => Some(Message::SelectPrevious),
                         KeyCode::Down if self.tab == AppTab::Todo => Some(Message::SelectNext),
@@ -268,7 +276,8 @@ impl App {
             .title_bottom(
                 Line::from(vec![
                     " NextItem <Arrow Down>".into(),
-                    " PreviousItem <Arrow Up> ".into(),
+                    " PreviousItem <Arrow Up>".into(),
+                    " DeleteItem <d> ".into()
                 ]).centered()
             )
             .border_set(PLAIN);
@@ -306,5 +315,21 @@ impl App {
             ])
             .block(table_block); //TODO 文本多行显示
         frame.render_stateful_widget(table, layout[1], &mut self.table_state);
+    }
+
+    fn save(&self) {
+        let file = std::fs::OpenOptions::new().write(true).open(STORE_PATH.as_path()).unwrap();
+        serde_json::to_writer(file, &self.todo_list).unwrap();
+    }
+
+    fn overwrite(&self) {
+        let file = std::fs::File::create(STORE_PATH.as_path()).unwrap();
+        serde_json::to_writer(file, &self.todo_list).unwrap();
+    }
+    fn load(&mut self) {
+        let file = std::fs::read(STORE_PATH.as_path()).unwrap();
+        if !file.is_empty() {
+            self.todo_list.extend(serde_json::from_slice::<Vec<Todo>>(&file).unwrap());
+        } 
     }
 }
