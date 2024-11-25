@@ -1,6 +1,11 @@
-use chrono::{Datelike, NaiveDate, Weekday};
+use std::io::Write;
 
-#[derive(Debug, Default)]
+use chrono::{Datelike, NaiveDate, Weekday};
+use serde::{Serialize, Deserialize};
+use crate::app::STORE_PATH;
+
+
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Todo {
     pub text: String,
     pub created_at: String,
@@ -8,7 +13,7 @@ pub struct Todo {
     pub state: TodoState,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub enum TodoState {
     #[default]
     Indefinite,
@@ -28,11 +33,11 @@ impl TodoState {
     }
 }
 
-#[derive(Debug, Default, PartialEq)]
+#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
 pub enum TodoKind {
     #[default]
     General,
-    Progress(String),
+    Progress(String),//TODO 这个怎么解析？
     Week(Weekday),
     Month(u32),
     Once(NaiveDate),
@@ -94,7 +99,7 @@ impl Todo {
         }
     }
 
-    fn state_check(&mut self) {
+    pub fn state_check(&mut self) {
         let now = chrono::Local::now().naive_local();
         match self.kind {
             TodoKind::Once(date) => {
@@ -121,6 +126,20 @@ impl Todo {
                 }
             }
             _ => {}
+        }
+    }
+
+    pub fn save(todo_list: &Vec<Todo>) {
+        let file = std::fs::OpenOptions::new().write(true).open(STORE_PATH.as_path()).unwrap();
+        serde_json::to_writer(file, todo_list).unwrap();
+    }
+
+    pub fn load() -> Vec<Todo> {
+        let file = std::fs::read(STORE_PATH.as_path()).unwrap();
+        if !file.is_empty() {
+            serde_json::from_slice(&file).unwrap()
+        } else {
+            vec![]
         }
     }
 }

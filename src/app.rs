@@ -8,8 +8,12 @@ use ratatui::{
     widgets::{canvas::{Canvas, Line as CanvasLine, Map, MapResolution, Rectangle}, Block, List, ListState, Paragraph, Row, Table, TableState, Tabs, Widget},
     DefaultTerminal, Frame,
 };
-use std::{default, io};
+use std::{default, io, path::PathBuf, sync::LazyLock};
 use tui_input::{backend::crossterm::EventHandler, Input as InputBuffer};
+
+pub const STORE_PATH: LazyLock<PathBuf> = LazyLock::new(||{
+    std::env::current_dir().unwrap().join("ttd-v2-store.json")
+});
 
 #[derive(Debug, Default)]
 pub enum InputMode {
@@ -82,7 +86,13 @@ impl App {
     }
 
     fn init(&mut self) {
+        
+        if !STORE_PATH.exists() {
+            std::fs::File::create(STORE_PATH.as_path()).unwrap();
+        }
+        self.todo_list = Todo::load();
         self.tab_state.select_first();
+        self.todo_list.iter_mut().for_each(Todo::state_check);
     }
     //view方法只负责渲染，尽量不要在这里修改全局数据，启用可变引用只是为了满足状态渲染函数的参数要求
     fn view(&mut self, frame: &mut Frame) {
@@ -110,6 +120,7 @@ impl App {
                 if !input.is_empty() {
                     let todo = Todo::new(input);
                     self.todo_list.push(todo);
+                    Todo::save(&self.todo_list);
                 }
                 self.input.buffer.reset();
             }
@@ -169,7 +180,7 @@ impl App {
             match event::read()? {
                 Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
                     let msg = match key_event.code {
-                        KeyCode::Esc => Some(Message::Quit),
+                        KeyCode::Char('q') => Some(Message::Quit),
                         KeyCode::Char('t') if self.tab != AppTab::Todo => Some(Message::TabChange(AppTab::Todo)),
                         KeyCode::Char('h') if self.tab != AppTab::Home => Some(Message::TabChange(AppTab::Home)),
                         KeyCode::Char('i') if self.tab == AppTab::Todo => Some(Message::InputModeChange(InputMode::Insert)),
