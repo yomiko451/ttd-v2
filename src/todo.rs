@@ -1,4 +1,4 @@
-use chrono::{NaiveDate, Weekday};
+use chrono::{Datelike, NaiveDate, Weekday};
 
 #[derive(Debug, Default)]
 pub struct Todo {
@@ -53,16 +53,14 @@ impl TodoKind {
 impl Todo {
     pub fn new(input: &str) -> Self {
         let (todo_text, todo_kind) = Self::input_parse(&input);
-        Todo {
+        let mut todo = Todo {
             text: todo_text.to_string(),
-            created_at: Self::get_time(),
+            created_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
             kind: todo_kind,
             state: TodoState::default(),//TODO 和当前比较一下
-        }
-    }
-
-    fn get_time() -> String {
-        chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
+        };
+        todo.state_check();
+        todo
     }
 
     fn input_parse(input: &str) -> (&str, TodoKind) {
@@ -95,33 +93,42 @@ impl Todo {
             None => (input.trim(), TodoKind::default()),
         }
     }
+
+    fn state_check(&mut self) {
+        let now = chrono::Local::now().naive_local();
+        match self.kind {
+            TodoKind::Once(date) => {
+                if date == now.date() {
+                    self.state = TodoState::OnGoing;
+                } else if date < now.date() {
+                    self.state = TodoState::Expired;
+                } else {
+                    self.state = TodoState::UpComing;
+                }
+            }
+            TodoKind::Week(weekday) => {
+                if weekday == now.weekday() {
+                    self.state = TodoState::OnGoing;
+                } else {
+                    self.state = TodoState::UpComing;
+                }
+            }
+            TodoKind::Month(day) => {
+                if day == now.day() {
+                    self.state = TodoState::OnGoing;
+                } else {
+                    self.state = TodoState::UpComing;
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 
-
+#[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
-    use chrono::Datelike;
-
     use super::*;
-
-    #[test]
-    fn test_date() {
-        let d1 = chrono::Local::now().naive_local();
-        let m1 = d1.month();
-        let day1 = d1.day();
-        let w1 = d1.weekday();
-        let date = d1.date();
-        std::thread::sleep(Duration::from_secs(1));
-        let d2 = chrono::Local::now().naive_local();
-        let m2 = d2.month();
-        assert!(d2 > d1);
-        assert!(m1 == m2);
-        println!("{}", w1);
-        println!("{}", day1);
-        println!("{}", date);
-    }
 
     #[test]
     fn todo_kind_parse_test() {

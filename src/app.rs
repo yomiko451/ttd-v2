@@ -5,7 +5,7 @@ use ratatui::{
     style::{Color, Style, Stylize},
     symbols::border::{self, PLAIN},
     text::{self, Line, Text},
-    widgets::{Block, List, ListState, Paragraph, Row, Table, Tabs, Widget},
+    widgets::{canvas::{Canvas, Line as CanvasLine, Map, MapResolution, Rectangle}, Block, List, ListState, Paragraph, Row, Table, TableState, Tabs, Widget},
     DefaultTerminal, Frame,
 };
 use std::{default, io};
@@ -29,6 +29,8 @@ pub struct App {
     pub todo_list: Vec<Todo>,
     pub exit: bool,
     pub tab: AppTab,
+    pub tab_state: ListState,
+    pub table_state: TableState,
     pub input: Input,
 }
 
@@ -38,6 +40,7 @@ pub enum AppTab {
     Home,
     Todo,
     Info,
+    Help
 }
 
 impl AppTab {
@@ -46,6 +49,7 @@ impl AppTab {
             String::from("Home"),
             String::from("Todo"),
             String::from("Info"),
+            String::from("Help"),
         ]
     }
 }
@@ -55,11 +59,15 @@ pub enum Message {
     TabChange(AppTab),
     InputStart,
     InputEnd,
+    SelectPrevious,
+    SelectNext,
     Quit,
 }
 
 impl App {
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
+        //初始化
+        self.init();
         //主循环
         while !self.exit {
             //根据数据渲染页面
@@ -74,7 +82,11 @@ impl App {
         Ok(())
     }
 
-    fn view(&self, frame: &mut Frame) {
+    fn init(&mut self) {
+        self.tab_state.select_first();
+    }
+    //view方法只负责渲染，尽量不要在这里修改全局数据，启用可变引用只是为了满足状态渲染函数的参数要求
+    fn view(&mut self, frame: &mut Frame) {
         let layout = Layout::default()
             .direction(Direction::Horizontal)
             .constraints(vec![Constraint::Percentage(15), Constraint::Percentage(95)])
@@ -88,6 +100,7 @@ impl App {
                 self.render_todo_list_window(frame, layout[1]);
             }
             AppTab::Info => {}
+            AppTab::Help => {}
         }
     }
 
@@ -101,7 +114,11 @@ impl App {
                 }
                 self.input.buffer.reset();
             }
-            Message::TabChange(tab) => self.tab = tab,
+            Message::TabChange(tab) => {
+                self.tab = tab;
+                let index = self.tab as usize;
+                self.tab_state.select(Some(index));
+            }
             Message::InputStart => {
                 if self.tab == AppTab::Todo {
                     self.input.mode = InputMode::Editing;
@@ -109,6 +126,28 @@ impl App {
             }
             Message::InputEnd => self.input.mode = InputMode::Normal,
             Message::Quit => self.exit = true,
+            Message::SelectPrevious => {
+                if let Some(index) = self.table_state.selected() {
+                    if index == 0 {
+                        self.table_state.select_last();
+                    } else {
+                        self.table_state.select_previous();
+                    }
+                } else {
+                    self.table_state.select_first();
+                }
+            }
+            Message::SelectNext => {
+                if let Some(index) = self.table_state.selected() {
+                    if index + 1 == self.todo_list.len() {
+                        self.table_state.select_first();
+                    } else {
+                        self.table_state.select_next();
+                    }
+                } else {
+                    self.table_state.select_last();
+                }
+            }
         }
         None //TODO 状态机看看需不需要，不需要就删了精简代码
     }
@@ -133,9 +172,11 @@ impl App {
                 Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
                     let msg = match key_event.code {
                         KeyCode::Esc => Some(Message::Quit),
-                        KeyCode::Char('l') => Some(Message::TabChange(AppTab::Todo)),
-                        KeyCode::Char('h') => Some(Message::TabChange(AppTab::Home)),
-                        KeyCode::Char('i') => Some(Message::InputStart),
+                        KeyCode::Char('t') if self.tab != AppTab::Todo => Some(Message::TabChange(AppTab::Todo)),
+                        KeyCode::Char('h') if self.tab != AppTab::Home => Some(Message::TabChange(AppTab::Home)),
+                        KeyCode::Char('i') if self.tab == AppTab::Todo => Some(Message::InputStart),
+                        KeyCode::Up if self.tab == AppTab::Todo => Some(Message::SelectPrevious),
+                        KeyCode::Down if self.tab == AppTab::Todo => Some(Message::SelectNext),
                         _ => None,
                     };
                     return Ok(msg);
@@ -145,13 +186,11 @@ impl App {
         }
         Ok(None)
     }
-
-    fn render_tab_bar(&self, frame: &mut Frame, rect: Rect) {
-        let title = Line::from(" *Tab* ").bold();
+    fn render_tab_bar(&mut self, frame: &mut Frame, rect: Rect) {
+        let title = Line::from(" Tab ").bold();
         let block = Block::bordered()
             .title(title.centered())
             .border_set(border::PLAIN);
-        let current_tab_index = self.tab as usize;
         let list = AppTab::get_tab_list()
             .into_iter()
             .map(|tab| Line::from(tab))
@@ -159,20 +198,27 @@ impl App {
             .highlight_style(Style::new().italic().cyan())
             .highlight_symbol(" >> ")
             .block(block);
-        let mut list_state = ListState::default();
-        list_state.select(Some(current_tab_index));
-        frame.render_stateful_widget(list, rect, &mut list_state);
+        frame.render_stateful_widget(list, rect, &mut self.tab_state);
     }
     fn render_main_window(&self, frame: &mut Frame, rect: Rect) {
         let title = Line::from(" Home ").bold();
         let block = Block::bordered()
             .title(title.centered())
             .border_set(border::PLAIN);
-        let counter_text = Text::from(vec![Line::from(vec!["value ".into()])]);
-        let paragraph = Paragraph::new(counter_text).centered().block(block);
-        frame.render_widget(paragraph, rect);
+        let canvas = Canvas::default()
+        .block(block)
+        .x_bounds([-180.0, 180.0])
+        .y_bounds([-90.0, 90.0])
+        .paint(|ctx| {
+            ctx.draw(&Map {
+                resolution: MapResolution::High,
+                color: Color::default(),
+            });
+            //ctx.layer(); TODO 继续画记得先保存当前状态   
+        });
+        frame.render_widget(canvas, rect);
     }
-    fn render_todo_list_window(&self, frame: &mut Frame, rect: Rect) {
+    fn render_todo_list_window(&mut self, frame: &mut Frame, rect: Rect) {
         let layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints(vec![Constraint::Length(3), Constraint::Min(1)])
@@ -225,6 +271,11 @@ impl App {
                     .style(Style::new().bold())
                     .bottom_margin(1),
             )
+            .footer(Row::new([
+                format!("Total: {}", self.todo_list.len()),
+                format!("Filtered: 0"), //TODO 筛选
+                ]))
+            .row_highlight_style(Style::new().reversed())
             .widths([
                 Constraint::Percentage(10),
                 Constraint::Percentage(35),
@@ -233,6 +284,6 @@ impl App {
                 Constraint::Percentage(20),
             ])
             .block(table_block); //TODO 文本多行显示
-        frame.render_widget(table, layout[1]);
+        frame.render_stateful_widget(table, layout[1], &mut self.table_state);
     }
 }
