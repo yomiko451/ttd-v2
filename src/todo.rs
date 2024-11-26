@@ -1,6 +1,8 @@
-use chrono::{Datelike, NaiveDate, Weekday};
-use serde::{Serialize, Deserialize};
+use chrono::{Datelike, NaiveDate, NaiveDateTime, Weekday};
+use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
 
+pub const TODAY: LazyLock<NaiveDateTime> = LazyLock::new(|| chrono::Local::now().naive_local());
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Todo {
@@ -8,6 +10,7 @@ pub struct Todo {
     pub created_at: String,
     pub kind: TodoKind,
     pub state: TodoState,
+    pub is_hidden: bool,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -34,7 +37,7 @@ impl TodoState {
 pub enum TodoKind {
     #[default]
     General,
-    Progress(String),//TODO 怎么解析？用@符号？
+    Progress(String), //TODO 怎么解析？用@符号？
     Week(Weekday),
     Month(u32),
     Once(NaiveDate),
@@ -59,7 +62,8 @@ impl Todo {
             text: todo_text.to_string(),
             created_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
             kind: todo_kind,
-            state: TodoState::default(),//TODO 和当前比较一下
+            state: TodoState::default(),
+            is_hidden: bool::default(),
         };
         todo.state_check();
         todo
@@ -87,46 +91,42 @@ impl Todo {
                         return (todo_text, todo_kind);
                     }
                     (input.trim(), todo_kind)
-    
                 } else {
                     (input.trim(), TodoKind::default())
                 }
             }
-            None => {
-                match input.split_once('@') {
-                    Some((text, suffix)) if !text.is_empty() && !suffix.is_empty() => {
-                        let todo_text = text.trim();
-                        let progress = suffix.trim();
-                        let todo_kind = TodoKind::Progress(progress.to_string());
-                        (todo_text, todo_kind)
-                    }
-                    _ => (input.trim(), TodoKind::default())
+            None => match input.split_once('@') {
+                Some((text, suffix)) if !text.is_empty() && !suffix.is_empty() => {
+                    let todo_text = text.trim();
+                    let progress = suffix.trim();
+                    let todo_kind = TodoKind::Progress(progress.to_string());
+                    (todo_text, todo_kind)
                 }
-            }
+                _ => (input.trim(), TodoKind::default()),
+            },
         }
     }
 
     pub fn state_check(&mut self) {
-        let now = chrono::Local::now().naive_local();
         match self.kind {
             TodoKind::Once(date) => {
-                if date == now.date() {
+                if date == TODAY.date() {
                     self.state = TodoState::OnGoing;
-                } else if date < now.date() {
+                } else if date < TODAY.date() {
                     self.state = TodoState::Expired;
                 } else {
                     self.state = TodoState::UpComing;
                 }
             }
             TodoKind::Week(weekday) => {
-                if weekday == now.weekday() {
+                if weekday == TODAY.weekday() {
                     self.state = TodoState::OnGoing;
                 } else {
                     self.state = TodoState::UpComing;
                 }
             }
             TodoKind::Month(day) => {
-                if day == now.day() {
+                if day == TODAY.day() {
                     self.state = TodoState::OnGoing;
                 } else {
                     self.state = TodoState::UpComing;
@@ -135,8 +135,10 @@ impl Todo {
             _ => {}
         }
     }
+    pub fn reset_hidden_flag(&mut self) {
+        self.is_hidden = false;
+    }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -151,11 +153,20 @@ mod tests {
             "do something awesome! -SaT",
             "do something awesome! -243",
             "do something awesome! -abcdefg",
-            ];
-        assert_eq!(Todo::input_parse(input[0]).1, TodoKind::Once(NaiveDate::from_ymd_opt(2024, 12, 22).unwrap()));
-        assert_eq!(Todo::input_parse(input[1]).1, TodoKind::Week(chrono::Weekday::Mon));
+        ];
+        assert_eq!(
+            Todo::input_parse(input[0]).1,
+            TodoKind::Once(NaiveDate::from_ymd_opt(2024, 12, 22).unwrap())
+        );
+        assert_eq!(
+            Todo::input_parse(input[1]).1,
+            TodoKind::Week(chrono::Weekday::Mon)
+        );
         assert_eq!(Todo::input_parse(input[2]).1, TodoKind::Month(24));
-        assert_eq!(Todo::input_parse(input[3]).1, TodoKind::Week(chrono::Weekday::Sat));
+        assert_eq!(
+            Todo::input_parse(input[3]).1,
+            TodoKind::Week(chrono::Weekday::Sat)
+        );
         assert_eq!(Todo::input_parse(input[4]).1, TodoKind::default());
         assert_eq!(Todo::input_parse(input[5]).1, TodoKind::default());
     }

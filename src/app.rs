@@ -1,19 +1,22 @@
-use crate::todo::{Todo, TodoKind};
+use crate::todo::{Todo, TodoKind, TODAY};
+use chrono::Datelike;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style, Stylize},
     symbols::border::{self, PLAIN},
     text::Line,
-    widgets::{canvas::{Canvas, Map, MapResolution}, Block, List, ListState, Paragraph, Row, Table, TableState},
+    widgets::{
+        canvas::{Canvas, Map, MapResolution},
+        Block, List, ListState, Paragraph, Row, Table, TableState,
+    },
     DefaultTerminal, Frame,
 };
 use std::{io, path::PathBuf, sync::LazyLock};
 use tui_input::{backend::crossterm::EventHandler, Input as InputBuffer};
 
-pub const STORE_PATH: LazyLock<PathBuf> = LazyLock::new(||{
-    std::env::current_dir().unwrap().join("ttd-v2-store.json")
-});
+pub const STORE_PATH: LazyLock<PathBuf> =
+    LazyLock::new(|| std::env::current_dir().unwrap().join("ttd-v2-store.json"));
 
 #[derive(Debug, Default, PartialEq)]
 pub enum InputMode {
@@ -31,7 +34,7 @@ pub struct App {
     pub table_state: TableState,
     pub input_buffer: InputBuffer,
     pub input_mode: InputMode,
-    pub update_index: Option<usize>
+    pub update_cache: Option<String>,
 }
 
 #[derive(Debug, Default, PartialEq, Copy, Clone)]
@@ -40,7 +43,7 @@ pub enum AppTab {
     Home,
     Todo,
     Info,
-    About
+    About,
 }
 
 impl AppTab {
@@ -58,6 +61,8 @@ pub enum Message {
     AddTodo,
     DeleteTodo,
     UpdateTodo,
+    Filter(TodoKind),
+    FilterReset,
     TabChange(AppTab),
     InputModeChange(InputMode),
     SelectPrevious,
@@ -117,9 +122,9 @@ impl App {
                 if !input.is_empty() {
                     let todo = Todo::new(input);
                     self.todo_list.push(todo);
-                    if let Some(index) = self.update_index {
-                        self.todo_list.remove(index);
-                        self.update_index = None;
+                    if let Some(ref created_at) = self.update_cache {
+                        self.todo_list.retain(|todo| todo.created_at != *created_at);
+                        self.update_cache = None;
                         self.table_state.select_last();
                     }
                     self.save_todo_list();
@@ -134,17 +139,22 @@ impl App {
             }
             Message::UpdateTodo => {
                 if let Some(index) = self.table_state.selected() {
-                    let todo = self.todo_list.get(index).unwrap();
+                    let todo = self
+                        .todo_list
+                        .iter()
+                        .filter(|todo| !todo.is_hidden)
+                        .nth(index)
+                        .unwrap();
                     let value = match todo.kind {
                         TodoKind::General => todo.text.clone(),
-                        TodoKind::Week(week) => format!("{}-{}", todo.text, week),
-                        TodoKind::Month(day) => format!("{}-{}", todo.text, day),
-                        TodoKind::Once(date) => format!("{}-{}", todo.text, date),
-                        TodoKind::Progress(ref progress) => format!("{}@{}", todo.text, progress)
+                        TodoKind::Week(week) => format!("{} - {}", todo.text, week),
+                        TodoKind::Month(day) => format!("{} - {}", todo.text, day),
+                        TodoKind::Once(date) => format!("{} - {}", todo.text, date),
+                        TodoKind::Progress(ref progress) => format!("{} @ {}", todo.text, progress),
                     };
                     self.input_buffer = self.input_buffer.clone().with_value(value);
                     self.input_mode = InputMode::Insert;
-                    self.update_index = Some(index);
+                    self.update_cache = Some(todo.created_at.clone());
                 }
             }
             Message::TabChange(tab) => {
@@ -155,7 +165,7 @@ impl App {
             Message::InputModeChange(input_mode) => {
                 if input_mode == InputMode::Normal {
                     self.input_buffer.reset();
-                    self.update_index = None;
+                    self.update_cache = None;
                 }
                 if self.tab == AppTab::Todo {
                     self.input_mode = input_mode;
@@ -184,6 +194,15 @@ impl App {
                     self.table_state.select_last();
                 }
             }
+            Message::Filter(todo_kind) => {
+                self.todo_list.iter_mut().for_each(|todo| {
+                    todo.is_hidden =
+                        !(std::mem::discriminant(&todo_kind) == std::mem::discriminant(&todo.kind));
+                });
+            }
+            Message::FilterReset => {
+                self.todo_list.iter_mut().for_each(Todo::reset_hidden_flag);
+            }
         }
         None //TODO 状态机看看需不需要，不需要就删了精简代码
     }
@@ -192,7 +211,9 @@ impl App {
             match event::read()? {
                 Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
                     match key_event.code {
-                        KeyCode::Esc => return Ok(Some(Message::InputModeChange(InputMode::Normal))),
+                        KeyCode::Esc => {
+                            return Ok(Some(Message::InputModeChange(InputMode::Normal)))
+                        }
                         KeyCode::Enter => return Ok(Some(Message::AddTodo)),
                         _ => {
                             self.input_buffer.handle_event(&Event::Key(key_event));
@@ -207,12 +228,36 @@ impl App {
             match event::read()? {
                 Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
                     let msg = match key_event.code {
-                        KeyCode::Char('q') => Some(Message::Quit),
-                        KeyCode::Char('t') if self.tab != AppTab::Todo => Some(Message::TabChange(AppTab::Todo)),
-                        KeyCode::Char('h') if self.tab != AppTab::Home => Some(Message::TabChange(AppTab::Home)),
+                        KeyCode::Char('q') => Some(Message::Quit), //TODO 大写也要考虑
+                        KeyCode::Char('t') if self.tab != AppTab::Todo => {
+                            Some(Message::TabChange(AppTab::Todo))
+                        }
+                        KeyCode::Char('h') if self.tab != AppTab::Home => {
+                            Some(Message::TabChange(AppTab::Home))
+                        }
                         KeyCode::Char('d') if self.tab == AppTab::Todo => Some(Message::DeleteTodo),
+                        KeyCode::Char('g') if self.tab == AppTab::Todo => {
+                            Some(Message::Filter(TodoKind::General))
+                        }
+                        KeyCode::Char('w') if self.tab == AppTab::Todo => {
+                            Some(Message::Filter(TodoKind::Week(TODAY.weekday())))
+                        }
+                        KeyCode::Char('m') if self.tab == AppTab::Todo => {
+                            Some(Message::Filter(TodoKind::Month(TODAY.day())))
+                        }
+                        KeyCode::Char('o') if self.tab == AppTab::Todo => {
+                            Some(Message::Filter(TodoKind::Once(TODAY.date())))
+                        }
+                        KeyCode::Char('p') if self.tab == AppTab::Todo => {
+                            Some(Message::Filter(TodoKind::Progress(String::default())))
+                        }
+                        KeyCode::Char('r') if self.tab == AppTab::Todo => {
+                            Some(Message::FilterReset)
+                        }
                         KeyCode::Char('u') if self.tab == AppTab::Todo => Some(Message::UpdateTodo),
-                        KeyCode::Char('i') if self.tab == AppTab::Todo => Some(Message::InputModeChange(InputMode::Insert)),
+                        KeyCode::Char('i') if self.tab == AppTab::Todo => {
+                            Some(Message::InputModeChange(InputMode::Insert))
+                        }
                         KeyCode::Up if self.tab == AppTab::Todo => Some(Message::SelectPrevious),
                         KeyCode::Down if self.tab == AppTab::Todo => Some(Message::SelectNext),
                         _ => None,
@@ -228,9 +273,7 @@ impl App {
         let title = Line::from(" Tab ").bold();
         let block = Block::bordered()
             .title(title.centered())
-            .title_bottom(
-                Line::from(" Quit <q> ").centered()
-            )
+            .title_bottom(Line::from(" Quit <q> ").centered())
             .border_set(border::PLAIN);
         let list = AppTab::get_tab_list()
             .into_iter()
@@ -247,16 +290,16 @@ impl App {
             .title(title.centered())
             .border_set(border::PLAIN);
         let canvas = Canvas::default()
-        .block(block)
-        .x_bounds([-180.0, 180.0])
-        .y_bounds([-90.0, 90.0])
-        .paint(|ctx| {
-            ctx.draw(&Map {
-                resolution: MapResolution::High,
-                color: Color::default(),
+            .block(block)
+            .x_bounds([-180.0, 180.0])
+            .y_bounds([-90.0, 90.0])
+            .paint(|ctx| {
+                ctx.draw(&Map {
+                    resolution: MapResolution::High,
+                    color: Color::default(),
+                });
+                //ctx.layer(); TODO 继续画记得先保存当前状态
             });
-            //ctx.layer(); TODO 继续画记得先保存当前状态   
-        });
         frame.render_widget(canvas, rect);
     }
     fn render_todo_list_window(&mut self, frame: &mut Frame, rect: Rect) {
@@ -268,10 +311,11 @@ impl App {
             .title(Line::from(" InputEdit ").bold().centered())
             .title_bottom(
                 Line::from(vec![
-                    " InsertMode <I>".into(),
-                    " NormalMode <Esc>".into(),
-                    " AddItem <Enter> ".into()
-                ]).centered()
+                    " Insert <I>".into(),
+                    " Normal <Esc>".into(),
+                    " Add <Enter> ".into(),
+                ])
+                .centered(),
             )
             .border_set(border::PLAIN);
         let width = rect.width.max(3) - 3;
@@ -288,9 +332,7 @@ impl App {
             // Make the cursor visible and ask tui-rs to put it at the specified coordinates after rendering
             frame.set_cursor_position((
                 // Put cursor past the end of the input text
-                layout[0].x
-                    + ((self.input_buffer.visual_cursor()).max(scroll) - scroll) as u16
-                    + 1,
+                layout[0].x + ((self.input_buffer.visual_cursor()).max(scroll) - scroll) as u16 + 1,
                 // Move one line down, from the border to the input line
                 layout[0].y + 1,
             ))
@@ -299,17 +341,20 @@ impl App {
             .title(Line::from(" TodoList ").bold().centered())
             .title_bottom(
                 Line::from(vec![
-                    " NextItem <Arrow Down>".into(),
-                    " PreviousItem <Arrow Up>".into(),
-                    " DeleteItem <d>".into(),
-                    " UpdateItem <u> ".into()
-                ]).centered()
+                    " Next <Down>".into(),
+                    " Previous <Up>".into(),
+                    " Delete <d>".into(),
+                    " Update <u> ".into(),
+                    " Filter <g, w, m, o, p, r> ".into(),
+                ])
+                .centered(),
             )
             .border_set(PLAIN);
         let table = self
             .todo_list
             .iter()
             .enumerate()
+            .filter(|(_, todo)| !todo.is_hidden)
             .map(|(index, todo)| -> Row {
                 Row::new([
                     (index + 1).to_string(),
@@ -324,12 +369,15 @@ impl App {
                 Row::new(["Index", "Content", "Kind", "State", "CreatedAt"])
                     .style(Style::new().bold().underlined())
                     .top_margin(1)
-                    .bottom_margin(1)
+                    .bottom_margin(1),
             )
             .footer(Row::new([
                 format!("Total: {}", self.todo_list.len()),
-                format!("Filtered: 0"), //TODO 筛选
-                ]))
+                format!(
+                    "Filtered: {}",
+                    self.todo_list.iter().filter(|todo| !todo.is_hidden).count()
+                ), //TODO 筛选
+            ]))
             .row_highlight_style(Style::new().reversed())
             .widths([
                 Constraint::Percentage(10),
@@ -342,7 +390,8 @@ impl App {
         frame.render_stateful_widget(table, layout[1], &mut self.table_state);
     }
 
-    fn save_todo_list(&self) {
+    fn save_todo_list(&mut self) {
+        self.todo_list.iter_mut().for_each(Todo::reset_hidden_flag);
         let file = std::fs::File::create(STORE_PATH.as_path()).unwrap();
         serde_json::to_writer(file, &self.todo_list).unwrap();
     }
@@ -350,7 +399,7 @@ impl App {
         let file = std::fs::read(STORE_PATH.as_path()).unwrap();
         if !file.is_empty() {
             self.todo_list = serde_json::from_slice(&file).unwrap();
-        } 
+        }
+        self.todo_list.iter_mut().for_each(Todo::state_check);
     }
 }
-
