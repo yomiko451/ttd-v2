@@ -1,5 +1,3 @@
-use std::io::Write;
-
 use chrono::{Datelike, NaiveDate, Weekday};
 use serde::{Serialize, Deserialize};
 
@@ -98,8 +96,8 @@ impl Todo {
                 match input.split_once('@') {
                     Some((text, suffix)) if !text.is_empty() && !suffix.is_empty() => {
                         let todo_text = text.trim();
-                        let suffix = suffix.trim();
-                        let todo_kind = TodoKind::Progress(suffix.to_string());
+                        let progress = suffix.trim();
+                        let todo_kind = TodoKind::Progress(progress.to_string());
                         (todo_text, todo_kind)
                     }
                     _ => (input.trim(), TodoKind::default())
