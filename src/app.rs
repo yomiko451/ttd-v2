@@ -42,7 +42,7 @@ pub enum AppTab {
     #[default]
     Home,
     Todo,
-    Info,
+    Sync,
     About,
 }
 
@@ -51,7 +51,7 @@ impl AppTab {
         vec![
             String::from("Home(H)"),
             String::from("Todo(T)"),
-            String::from("Info(I)"),
+            String::from("Sync(S)"),
             String::from("About(A)"),
         ]
     }
@@ -95,6 +95,9 @@ impl App {
         self.load_todo_list();
         self.tab_state.select_first();
         self.todo_list.iter_mut().for_each(Todo::state_check);
+        std::thread::spawn(||{
+            //TODO 同步功能
+        });
     }
     //view方法只负责渲染，尽量不要在这里修改全局数据，启用可变引用只是为了满足状态渲染函数的参数要求
     fn view(&mut self, frame: &mut Frame) {
@@ -110,7 +113,7 @@ impl App {
             AppTab::Todo => {
                 self.render_todo_list_window(frame, layout[1]);
             }
-            AppTab::Info => {}
+            AppTab::Sync => {}
             AppTab::About => {}
         }
     }
@@ -376,7 +379,8 @@ impl App {
                 format!(
                     "Filtered: {}",
                     self.todo_list.iter().filter(|todo| !todo.is_hidden).count()
-                ), //TODO 筛选
+                ),
+                format!("State: unsynced") //TODO 到时候换个地方
             ]))
             .row_highlight_style(Style::new().reversed())
             .widths([
