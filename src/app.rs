@@ -1,5 +1,5 @@
-use crate::todo::{Todo, TodoKind, TODAY};
-use chrono::Datelike;
+use crate::{todo::{Todo, TodoKind, TODAY}};
+use chrono::{Datelike, NaiveDateTime};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -12,11 +12,19 @@ use ratatui::{
     },
     DefaultTerminal, Frame,
 };
-use std::{io, path::PathBuf, sync::LazyLock};
+use std::{io, path::PathBuf, sync::{Arc, LazyLock}};
 use tui_input::{backend::crossterm::EventHandler, Input as InputBuffer};
+use serde::{Serialize, Deserialize};
 
-pub const STORE_PATH: LazyLock<PathBuf> =
-    LazyLock::new(|| std::env::current_dir().unwrap().join("ttd-v2-store.json"));
+pub static CURRENT_PATH: LazyLock<PathBuf> =
+    LazyLock::new(|| std::env::current_dir().unwrap());
+
+pub static DATA_PATH: LazyLock<PathBuf> = LazyLock::new(||{
+    CURRENT_PATH.join("store.json")
+});
+
+pub static SYNCLOG_PATH: LazyLock<PathBuf> =
+    LazyLock::new(|| std::env::current_dir().unwrap().join("sync.json"));
 
 #[derive(Debug, Default, PartialEq)]
 pub enum InputMode {
@@ -36,6 +44,9 @@ pub struct App {
     pub input_mode: InputMode,
     pub update_cache: Option<String>,
 }
+
+
+
 
 #[derive(Debug, Default, PartialEq, Copy, Clone)]
 pub enum AppTab {
@@ -89,14 +100,17 @@ impl App {
     }
 
     fn init(&mut self) {
-        if !STORE_PATH.exists() {
-            std::fs::File::create(STORE_PATH.as_path()).unwrap();
+        if !DATA_PATH.exists() {
+            std::fs::File::create(DATA_PATH.as_path()).unwrap();
+        }
+        if !SYNCLOG_PATH.exists() {
+            std::fs::File::create(SYNCLOG_PATH.as_path()).unwrap();
         }
         self.load_todo_list();
         self.tab_state.select_first();
         self.todo_list.iter_mut().for_each(Todo::state_check);
-        std::thread::spawn(||{
-            //TODO 同步功能
+        std::thread::spawn(move ||{
+            crate::send_broadcast().unwrap() //TODO 还要优化
         });
     }
     //view方法只负责渲染，尽量不要在这里修改全局数据，启用可变引用只是为了满足状态渲染函数的参数要求
@@ -108,12 +122,14 @@ impl App {
         self.render_tab_bar(frame, layout[0]);
         match self.tab {
             AppTab::Home => {
-                self.render_main_window(frame, layout[1]);
+                self.render_home_window(frame, layout[1]);
             }
             AppTab::Todo => {
-                self.render_todo_list_window(frame, layout[1]);
+                self.render_todo_window(frame, layout[1]);
             }
-            AppTab::Sync => {}
+            AppTab::Sync => {
+                self.render_sync_window(frame, layout[1]);
+            }
             AppTab::About => {}
         }
     }
@@ -238,6 +254,9 @@ impl App {
                         KeyCode::Char('h') if self.tab != AppTab::Home => {
                             Some(Message::TabChange(AppTab::Home))
                         }
+                        KeyCode::Char('s') if self.tab != AppTab::Sync => {
+                            Some(Message::TabChange(AppTab::Sync))
+                        }
                         KeyCode::Char('d') if self.tab == AppTab::Todo => Some(Message::DeleteTodo),
                         KeyCode::Char('g') if self.tab == AppTab::Todo => {
                             Some(Message::Filter(TodoKind::General))
@@ -287,7 +306,7 @@ impl App {
             .block(block);
         frame.render_stateful_widget(list, rect, &mut self.tab_state);
     }
-    fn render_main_window(&self, frame: &mut Frame, rect: Rect) {
+    fn render_home_window(&self, frame: &mut Frame, rect: Rect) {
         let title = Line::from(" Home ").bold();
         let block = Block::bordered()
             .title(title.centered())
@@ -305,7 +324,7 @@ impl App {
             });
         frame.render_widget(canvas, rect);
     }
-    fn render_todo_list_window(&mut self, frame: &mut Frame, rect: Rect) {
+    fn render_todo_window(&mut self, frame: &mut Frame, rect: Rect) {
         let layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints(vec![Constraint::Length(3), Constraint::Min(1)])
@@ -394,13 +413,18 @@ impl App {
         frame.render_stateful_widget(table, layout[1], &mut self.table_state);
     }
 
+    fn render_sync_window(&mut self, frame: &mut Frame, rect: Rect) {
+        let p = Paragraph::new("text")
+            .block(Block::bordered().border_set(border::PLAIN));
+        frame.render_widget(p, rect);
+    }
     fn save_todo_list(&mut self) {
         self.todo_list.iter_mut().for_each(Todo::reset_hidden_flag);
-        let file = std::fs::File::create(STORE_PATH.as_path()).unwrap();
+        let file = std::fs::File::create(DATA_PATH.as_path()).unwrap();
         serde_json::to_writer(file, &self.todo_list).unwrap();
     }
     fn load_todo_list(&mut self) {
-        let file = std::fs::read(STORE_PATH.as_path()).unwrap();
+        let file = std::fs::read(DATA_PATH.as_path()).unwrap();
         if !file.is_empty() {
             self.todo_list = serde_json::from_slice(&file).unwrap();
         }

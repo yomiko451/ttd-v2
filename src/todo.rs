@@ -4,7 +4,7 @@ use std::sync::LazyLock;
 
 pub const TODAY: LazyLock<NaiveDateTime> = LazyLock::new(|| chrono::Local::now().naive_local());
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct Todo {
     pub text: String,
     pub created_at: String,
@@ -13,7 +13,7 @@ pub struct Todo {
     pub is_hidden: bool,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub enum TodoState {
     #[default]
     Indefinite,
@@ -33,7 +33,7 @@ impl TodoState {
     }
 }
 
-#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Default, PartialEq, Serialize, Deserialize, Clone)]
 pub enum TodoKind {
     #[default]
     General,
