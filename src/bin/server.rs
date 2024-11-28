@@ -1,67 +1,93 @@
 use crossterm::style::Stylize;
-use ttd_v2::{SyncLog, Todo};
-use std::{path::PathBuf, sync::LazyLock, io::{self, Read, Write}, net::{TcpListener, UdpSocket}, time::{self, Duration}};
+use std::{
+    io::{self, Read, Write},
+    net::{TcpListener, UdpSocket},
+    path::PathBuf,
+    sync::LazyLock,
+    time::{self, Duration},
+};
+use ttd_v2::{SyncState, SyncKind, Todo};
 
-static CURRENT_PATH: LazyLock<PathBuf> =
-    LazyLock::new(|| std::env::current_dir().unwrap());
-static SERVER_SYNCLOG_PATH: LazyLock<PathBuf> =
-    LazyLock::new(|| CURRENT_PATH.join("server_sync.json")
-);
-static SERVER_DATA_PATH: LazyLock<PathBuf> =
-    LazyLock::new(|| CURRENT_PATH.join("server_store.json")
+static CURRENT_PATH: LazyLock<PathBuf> = LazyLock::new(|| std::env::current_dir().unwrap());
+static SERVER_SYNC_STATE_PATH: LazyLock<PathBuf> =
+    LazyLock::new(|| CURRENT_PATH.join("server_sync.json"));
+static SERVER_TODO_LIST_PATH: LazyLock<PathBuf> = LazyLock::new(
+    || CURRENT_PATH.join("server_store.json"), //TODO改名字
 );
 
 fn main() {
-    init();
-    monitor_broadcast().unwrap();//TODO
+    init().unwrap();
+    monitor_broadcast().unwrap(); //TODO
 }
 
-fn init() {
-    println!("Sync Server Started!");
-    if !SERVER_SYNCLOG_PATH.exists() {
-        std::fs::File::create(SERVER_SYNCLOG_PATH.as_path()).unwrap();
+fn init() -> std::io::Result<()> {
+    if !SERVER_SYNC_STATE_PATH.exists() {
+        let file = std::fs::File::create(SERVER_SYNC_STATE_PATH.as_path())?;
+        serde_json::to_writer(file, &SyncState::default())?;
     }
+    if !SERVER_TODO_LIST_PATH.exists() {
+        let file = std::fs::File::create(SERVER_TODO_LIST_PATH.as_path())?;
+        serde_json::to_writer(file, &Vec::<Todo>::new())?;
+    }
+    println!("Server Data Initialized!");
+    println!("Sync Server Started!");
+    Ok(())
 }
 
 fn monitor_broadcast() -> std::io::Result<()> {
-    let mut sync_log = SyncLog::new();
-    if let Ok(log) = std::fs::read(SERVER_SYNCLOG_PATH.as_path()) {
-            if !log.is_empty() {
-                sync_log = serde_json::from_slice(&log).unwrap();
-            } 
-    };
+    let server_sync_state_raw = std::fs::read(SERVER_SYNC_STATE_PATH.as_path())?;
+    let mut server_sync_state = serde_json::from_slice::<SyncState>(&server_sync_state_raw)?;
+    let mut server_todo_list_raw = std::fs::read(SERVER_TODO_LIST_PATH.as_path())?;
     let socket = UdpSocket::bind("0.0.0.0:23333")?;
     let mut buf = [0; 10];
-    
-    let (amt, src) = socket.recv_from(&mut buf)?;
-    if &buf[..amt] == b"yuri" {
-        socket.send_to(b"lily", src)?;
-        let listener = TcpListener::bind(socket.local_addr().unwrap())?;
-        let mut data = vec![];
-        for stream in listener.incoming() {
-            let mut stream = stream.unwrap();
-            let mut buf = [0; 1024];
-            loop {
-                let amt = stream.read(&mut buf)?;
-                if amt == 0 {break;}
-                data.extend_from_slice(&buf[..amt]);
+    loop {
+        let (amt, src) = socket.recv_from(&mut buf)?;
+        if &buf[..amt] == b"yuri" {
+            socket.send_to(b"lily", src)?;
+            let listener = TcpListener::bind(socket.local_addr().unwrap())?;
+            let mut data = vec![];
+            for stream in listener.incoming() {
+                let mut stream = stream.unwrap();
+                let mut buf = [0; 1024];
+                loop {
+                    let amt = stream.read(&mut buf)?;
+                    if amt == 0 {
+                        break;
+                    }
+                    data.extend_from_slice(&buf[..amt]);
+                }
+                let index = data.windows(4).position(|sep| sep == b"----").unwrap();
+                let sync_state_raw = &data.split_off(index + 4);
+                let todo_list_raw = &data[..index];
+                let sync_state = serde_json::from_slice::<SyncState>(&sync_state_raw)?;
+                println!("sync start!");
+                println!("---server--- id: {} last sync state: {} at: {}", server_sync_state.id, server_sync_state.last_sync_kind, server_sync_state.last_save_at.format("%Y-%m-%d %H:%M:%S"));
+                println!("---local--- id: {} last sync state: {} at: {}", sync_state.id, sync_state.last_sync_kind, sync_state.last_save_at.format("%Y-%m-%d %H:%M:%S"));
+                if server_sync_state.last_save_at <= sync_state.last_save_at {
+                    server_sync_state = sync_state;
+                    server_sync_state.last_sync_kind = SyncKind::ToServer;
+                    server_todo_list_raw = todo_list_raw.into();
+                    stream.write_all(b"synced")?;
+                    stream.shutdown(std::net::Shutdown::Both)?;
+                } else {
+                    stream.write_all(&server_todo_list_raw)?;
+                    stream.write_all(&server_sync_state_raw)?;
+                    stream.shutdown(std::net::Shutdown::Both)?;
+                }
+                let sync_log_file = std::fs::File::create(SERVER_SYNC_STATE_PATH.as_path())?;
+                serde_json::to_writer(sync_log_file, &server_sync_state)?;
+                let todo_list_file = std::fs::File::create(SERVER_TODO_LIST_PATH.as_path())?;
+                serde_json::to_writer(todo_list_file, &server_todo_list_raw)?;
+                println!("{}","sync success!".green());
+                println!(
+                    "---server--- id: {} new sync state: {} at: {}",
+                    server_sync_state.id,
+                    server_sync_state.last_sync_kind,
+                    server_sync_state.last_save_at.format("%Y-%m-%d %H:%M:%S")
+                );
+                break;
             }
-            let msg = String::from_utf8_lossy(&data);
-            for i in msg.split("----") {
-                println!("msg: {}", i);
-                println!("------------------------");
-            }
-
-            // let sync_data: SyncLog = serde_json::from_slice(&buf).unwrap();
-            // if sync_data.last_sync > sync_log.last_sync {
-            //     stream.write_all(b"need!").unwrap(); //TODO
-            //     let file = std::fs::File::create(SERVER_SYNCLOG_PATH.as_path()).unwrap();
-            //     serde_json::to_writer(file, &sync_data).unwrap();
-            //     println!("{} - {} - {} - {}", "sync success!".green(), sync_data.id, sync_data.version, sync_data.last_sync.format("%Y-%m-%d %H:%M:%S"));
-            // }
-            //TODO小于就反过来发过去
         }
+        continue;
     }
-    Ok(())
-
 }

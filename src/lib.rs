@@ -1,9 +1,9 @@
 mod app;
-mod todo;
 mod sync;
+mod todo;
 
 pub use crate::{
     app::App,
+    sync::{sync_app_data, SyncState, SyncKind},
     todo::Todo,
-    sync::{SyncLog, send_broadcast}
 };

@@ -1,4 +1,6 @@
-use crate::{todo::{Todo, TodoKind, TODAY}};
+use crate::{
+    todo::{Todo, TodoKind, TODAY}, SyncKind, SyncState
+};
 use chrono::{Datelike, NaiveDateTime};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::{
@@ -12,18 +14,19 @@ use ratatui::{
     },
     DefaultTerminal, Frame,
 };
-use std::{io, path::PathBuf, sync::{Arc, LazyLock}};
+use serde::{Deserialize, Serialize};
+use std::{
+    io,
+    path::PathBuf,
+    sync::{Arc, LazyLock},
+};
 use tui_input::{backend::crossterm::EventHandler, Input as InputBuffer};
-use serde::{Serialize, Deserialize};
 
-pub static CURRENT_PATH: LazyLock<PathBuf> =
-    LazyLock::new(|| std::env::current_dir().unwrap());
+pub static CURRENT_PATH: LazyLock<PathBuf> = LazyLock::new(|| std::env::current_dir().unwrap());
 
-pub static DATA_PATH: LazyLock<PathBuf> = LazyLock::new(||{
-    CURRENT_PATH.join("store.json")
-});
+pub static TODO_LIST_PATH: LazyLock<PathBuf> = LazyLock::new(|| CURRENT_PATH.join("store.json"));
 
-pub static SYNCLOG_PATH: LazyLock<PathBuf> =
+pub static SYNC_STATE_PATH: LazyLock<PathBuf> =
     LazyLock::new(|| std::env::current_dir().unwrap().join("sync.json"));
 
 #[derive(Debug, Default, PartialEq)]
@@ -42,11 +45,9 @@ pub struct App {
     pub table_state: TableState,
     pub input_buffer: InputBuffer,
     pub input_mode: InputMode,
+    pub sync_state: SyncState,
     pub update_cache: Option<String>,
 }
-
-
-
 
 #[derive(Debug, Default, PartialEq, Copy, Clone)]
 pub enum AppTab {
@@ -69,9 +70,10 @@ impl AppTab {
 }
 
 pub enum Message {
-    AddTodo,
-    DeleteTodo,
-    UpdateTodo,
+    Add,
+    Delete,
+    Save,
+    Update,
     Filter(TodoKind),
     FilterReset,
     TabChange(AppTab),
@@ -100,18 +102,16 @@ impl App {
     }
 
     fn init(&mut self) {
-        if !DATA_PATH.exists() {
-            std::fs::File::create(DATA_PATH.as_path()).unwrap();
+        if !TODO_LIST_PATH.exists() {
+            std::fs::File::create(TODO_LIST_PATH.as_path()).unwrap();
         }
-        if !SYNCLOG_PATH.exists() {
-            std::fs::File::create(SYNCLOG_PATH.as_path()).unwrap();
+        if !SYNC_STATE_PATH.exists() {
+            std::fs::File::create(SYNC_STATE_PATH.as_path()).unwrap();
         }
         self.load_todo_list();
         self.tab_state.select_first();
         self.todo_list.iter_mut().for_each(Todo::state_check);
-        std::thread::spawn(move ||{
-            crate::send_broadcast().unwrap() //TODO 还要优化
-        });
+        self.sync_data();
     }
     //view方法只负责渲染，尽量不要在这里修改全局数据，启用可变引用只是为了满足状态渲染函数的参数要求
     fn view(&mut self, frame: &mut Frame) {
@@ -136,7 +136,7 @@ impl App {
 
     fn update(&mut self, msg: Message) -> Option<Message> {
         match msg {
-            Message::AddTodo => {
+            Message::Add => {
                 let input = self.input_buffer.value();
                 if !input.is_empty() {
                     let todo = Todo::new(input);
@@ -146,17 +146,24 @@ impl App {
                         self.update_cache = None;
                         self.table_state.select_last();
                     }
-                    self.save_todo_list();
                     self.input_buffer.reset();
                 }
+                Some(Message::Save)
             }
-            Message::DeleteTodo => {
+            Message::Save => {
+                self.todo_list.iter_mut().for_each(Todo::reset_hidden_flag);
+                self.sync_state.last_save_at = chrono::Local::now().naive_local();
+                self.sync_state.last_sync_kind = SyncKind::LocalSave;
+                self.save_todo_list();
+                None
+            }
+            Message::Delete => {
                 if let Some(index) = self.table_state.selected() {
                     self.todo_list.remove(index);
-                    self.save_todo_list();
                 }
+                Some(Message::Save)
             }
-            Message::UpdateTodo => {
+            Message::Update => {
                 if let Some(index) = self.table_state.selected() {
                     let todo = self
                         .todo_list
@@ -175,11 +182,13 @@ impl App {
                     self.input_mode = InputMode::Insert;
                     self.update_cache = Some(todo.created_at.clone());
                 }
+                None
             }
             Message::TabChange(tab) => {
                 self.tab = tab;
                 let index = self.tab as usize;
                 self.tab_state.select(Some(index));
+                None
             }
             Message::InputModeChange(input_mode) => {
                 if input_mode == InputMode::Normal {
@@ -189,8 +198,12 @@ impl App {
                 if self.tab == AppTab::Todo {
                     self.input_mode = input_mode;
                 }
+                None
             }
-            Message::Quit => self.exit = true,
+            Message::Quit => {
+                self.exit = true;
+                None
+            }
             Message::SelectPrevious => {
                 if let Some(index) = self.table_state.selected() {
                     if index == 0 {
@@ -201,6 +214,7 @@ impl App {
                 } else {
                     self.table_state.select_first();
                 }
+                None
             }
             Message::SelectNext => {
                 if let Some(index) = self.table_state.selected() {
@@ -212,18 +226,20 @@ impl App {
                 } else {
                     self.table_state.select_last();
                 }
+                None
             }
             Message::Filter(todo_kind) => {
                 self.todo_list.iter_mut().for_each(|todo| {
                     todo.is_hidden =
                         !(std::mem::discriminant(&todo_kind) == std::mem::discriminant(&todo.kind));
                 });
+                None
             }
             Message::FilterReset => {
                 self.todo_list.iter_mut().for_each(Todo::reset_hidden_flag);
+                None
             }
         }
-        None //TODO 状态机看看需不需要，不需要就删了精简代码
     }
     fn handle_events(&mut self) -> io::Result<Option<Message>> {
         if let InputMode::Insert = self.input_mode {
@@ -233,7 +249,7 @@ impl App {
                         KeyCode::Esc => {
                             return Ok(Some(Message::InputModeChange(InputMode::Normal)))
                         }
-                        KeyCode::Enter => return Ok(Some(Message::AddTodo)),
+                        KeyCode::Enter => return Ok(Some(Message::Add)),
                         _ => {
                             self.input_buffer.handle_event(&Event::Key(key_event));
                         }
@@ -257,7 +273,7 @@ impl App {
                         KeyCode::Char('s') if self.tab != AppTab::Sync => {
                             Some(Message::TabChange(AppTab::Sync))
                         }
-                        KeyCode::Char('d') if self.tab == AppTab::Todo => Some(Message::DeleteTodo),
+                        KeyCode::Char('d') if self.tab == AppTab::Todo => Some(Message::Delete),
                         KeyCode::Char('g') if self.tab == AppTab::Todo => {
                             Some(Message::Filter(TodoKind::General))
                         }
@@ -276,7 +292,7 @@ impl App {
                         KeyCode::Char('r') if self.tab == AppTab::Todo => {
                             Some(Message::FilterReset)
                         }
-                        KeyCode::Char('u') if self.tab == AppTab::Todo => Some(Message::UpdateTodo),
+                        KeyCode::Char('u') if self.tab == AppTab::Todo => Some(Message::Update),
                         KeyCode::Char('i') if self.tab == AppTab::Todo => {
                             Some(Message::InputModeChange(InputMode::Insert))
                         }
@@ -399,7 +415,7 @@ impl App {
                     "Filtered: {}",
                     self.todo_list.iter().filter(|todo| !todo.is_hidden).count()
                 ),
-                format!("State: unsynced") //TODO 到时候换个地方
+                format!("State: unsynced"), //TODO 到时候换个地方
             ]))
             .row_highlight_style(Style::new().reversed())
             .widths([
@@ -414,20 +430,44 @@ impl App {
     }
 
     fn render_sync_window(&mut self, frame: &mut Frame, rect: Rect) {
-        let p = Paragraph::new("text")
-            .block(Block::bordered().border_set(border::PLAIN));
+        let p = Paragraph::new(format!("{}", self.sync_state.last_save_at)).block(Block::bordered().border_set(border::PLAIN));
         frame.render_widget(p, rect);
     }
     fn save_todo_list(&mut self) {
-        self.todo_list.iter_mut().for_each(Todo::reset_hidden_flag);
-        let file = std::fs::File::create(DATA_PATH.as_path()).unwrap();
-        serde_json::to_writer(file, &self.todo_list).unwrap();
+        let todo_list_file = std::fs::File::create(TODO_LIST_PATH.as_path()).unwrap();
+        let sync_log_file = std::fs::File::create(SYNC_STATE_PATH.as_path()).unwrap();
+        serde_json::to_writer(todo_list_file, &self.todo_list).unwrap();
+        serde_json::to_writer(sync_log_file, &self.sync_state).unwrap();
     }
     fn load_todo_list(&mut self) {
-        let file = std::fs::read(DATA_PATH.as_path()).unwrap();
-        if !file.is_empty() {
-            self.todo_list = serde_json::from_slice(&file).unwrap();
+        let todo_list_file = std::fs::read(TODO_LIST_PATH.as_path()).unwrap();
+        if !todo_list_file.is_empty() {
+            self.todo_list = serde_json::from_slice(&todo_list_file).unwrap();
         }
         self.todo_list.iter_mut().for_each(Todo::state_check);
+        let sync_log_file = std::fs::read(SYNC_STATE_PATH.as_path()).unwrap();
+        if !sync_log_file.is_empty() {
+            self.sync_state = serde_json::from_slice(&sync_log_file).unwrap();
+        }
+    }
+
+    fn sync_data(&mut self) {
+        if self.sync_state.last_sync_kind == SyncKind::Init {
+            return;
+        }
+        match std::thread::spawn(move || crate::sync_app_data()).join() {
+            Ok(Ok(Some((sync_log, todo_list)))) => {
+                self.sync_state = sync_log;
+                self.todo_list = todo_list;
+                self.save_todo_list();
+                println!("Sync Success! New Version: {}", self.sync_state.last_sync_kind)
+            }
+            Ok(Ok(None)) => {
+                
+            }
+            _ => {
+                //TODO
+            }
+        }
     }
 }
