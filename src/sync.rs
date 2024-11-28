@@ -85,11 +85,3 @@ pub fn sync_app_data() -> io::Result<Option<(SyncState, Vec<Todo>)>> {
     }
     return Ok(None);
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_send_broadcast() {}
-}

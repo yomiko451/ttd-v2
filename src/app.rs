@@ -1,7 +1,7 @@
 use crate::{
     todo::{Todo, TodoKind, TODAY}, SyncKind, SyncState
 };
-use chrono::{Datelike, NaiveDateTime};
+use chrono::{Datelike};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -14,20 +14,19 @@ use ratatui::{
     },
     DefaultTerminal, Frame,
 };
-use serde::{Deserialize, Serialize};
 use std::{
     io,
     path::PathBuf,
-    sync::{Arc, LazyLock},
+    sync::{LazyLock},
 };
 use tui_input::{backend::crossterm::EventHandler, Input as InputBuffer};
 
 pub static CURRENT_PATH: LazyLock<PathBuf> = LazyLock::new(|| std::env::current_dir().unwrap());
 
-pub static TODO_LIST_PATH: LazyLock<PathBuf> = LazyLock::new(|| CURRENT_PATH.join("store.json"));
+pub static TODO_LIST_PATH: LazyLock<PathBuf> = LazyLock::new(|| CURRENT_PATH.join("todo_list.json"));
 
 pub static SYNC_STATE_PATH: LazyLock<PathBuf> =
-    LazyLock::new(|| std::env::current_dir().unwrap().join("sync.json"));
+    LazyLock::new(|| std::env::current_dir().unwrap().join("sync_state.json"));
 
 #[derive(Debug, Default, PartialEq)]
 pub enum InputMode {
@@ -201,6 +200,7 @@ impl App {
                 None
             }
             Message::Quit => {
+                //TODO 先同步一下
                 self.exit = true;
                 None
             }
