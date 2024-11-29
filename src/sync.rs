@@ -1,20 +1,13 @@
-use chrono::{Datelike, Local, NaiveDateTime, Timelike};
-use core::fmt;
-use crossterm::style::Stylize;
+use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
 use std::{
     fmt::Display,
     io::{self, Read, Write},
-    net::{TcpListener, TcpStream, UdpSocket},
-    sync::Arc,
-    thread,
+    net::{TcpStream, UdpSocket},
     time::{self, Duration},
 };
 
-use crate::{
-    app::{SYNC_STATE_PATH, TODO_LIST_PATH},
-    todo::{self, Todo},
-};
+use crate::todo::Todo;
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct SyncState {

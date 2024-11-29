@@ -15,8 +15,7 @@ use ratatui::{
     },
     DefaultTerminal, Frame,
 };
-use serde::{Deserialize, Serialize};
-use std::{borrow::Borrow, io, path::PathBuf, sync::{mpsc, Arc, LazyLock, Mutex, RwLock}};
+use std::{io, path::PathBuf, sync::{Arc, LazyLock, RwLock}};
 use tui_input::{backend::crossterm::EventHandler, Input as InputBuffer};
 
 pub static CURRENT_PATH: LazyLock<PathBuf> = LazyLock::new(|| std::env::current_dir().unwrap());
@@ -113,20 +112,28 @@ impl App {
     }
     //view方法只负责渲染，尽量不要在这里修改全局数据，启用可变引用只是为了满足状态渲染函数的参数要求
     fn view(&mut self, frame: &mut Frame) {
-        let layout = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints(vec![Constraint::Percentage(15), Constraint::Percentage(95)])
+        let layout_outter = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Min(0),
+            ])
             .split(frame.area());
-        self.render_tab_bar(frame, layout[0]);
+        let layout_inner = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(15), Constraint::Percentage(95)])
+            .split(layout_outter[1]);
+        self.render_msg_bar(frame, layout_outter[0]);
+        self.render_tab_bar(frame, layout_inner[0]);
         match self.tab {
             AppTab::Home => {
-                self.render_home_window(frame, layout[1]);
+                self.render_home_window(frame, layout_inner[1]);
             }
             AppTab::Todo => {
-                self.render_todo_window(frame, layout[1]);
+                self.render_todo_window(frame, layout_inner[1]);
             }
             AppTab::Sync => {
-                self.render_sync_window(frame, layout[1]);
+                self.render_sync_window(frame, layout_inner[1]);
             }
             AppTab::About => {}
         }
@@ -311,6 +318,18 @@ impl App {
         }
         Ok(None)
     }
+
+    fn render_msg_bar(&mut self, frame: &mut Frame, rect: Rect) {
+        let sync_state = self.sync_state.read().unwrap();
+        let msg = Line::from(vec![
+            "hi! today is a nice day!".into(),
+            " | ".into(),
+            format!("last save at: {}", sync_state.last_save_at.format("%Y-%m-%d %H:%M:%S")).into(),
+            " | ".into(),
+            format!("currnet sync state: {}", sync_state.last_sync_kind).into()
+        ]).centered();
+        frame.render_widget(msg, rect);
+    }
     fn render_tab_bar(&mut self, frame: &mut Frame, rect: Rect) {
         let title = Line::from(" Tab ").bold();
         let block = Block::bordered()
@@ -419,8 +438,7 @@ impl App {
                 format!(
                     "Filtered: {}",
                     todo_list.iter().filter(|todo| !todo.is_hidden).count()
-                ),
-                format!("State: unsynced"), //TODO 到时候换个地方
+                )
             ]))
             .row_highlight_style(Style::new().reversed())
             .widths([
@@ -441,9 +459,9 @@ impl App {
     }
     fn save_todo_list(&mut self) {
         let todo_list_file = std::fs::File::create(TODO_LIST_PATH.as_path()).unwrap();
-        let sync_log_file = std::fs::File::create(SYNC_STATE_PATH.as_path()).unwrap();
+        let sync_state_file = std::fs::File::create(SYNC_STATE_PATH.as_path()).unwrap();
         serde_json::to_writer(todo_list_file, &self.todo_list.read().unwrap().clone()).unwrap();
-        serde_json::to_writer(sync_log_file, &self.sync_state.read().unwrap().clone()).unwrap();
+        serde_json::to_writer(sync_state_file, &self.sync_state.read().unwrap().clone()).unwrap();
     }
     fn load_todo_list(&mut self) {
         let todo_list_file = std::fs::read(TODO_LIST_PATH.as_path()).unwrap();
@@ -451,9 +469,9 @@ impl App {
             *self.todo_list.write().unwrap() = serde_json::from_slice(&todo_list_file).unwrap();
         }
         self.todo_list.write().unwrap().iter_mut().for_each(Todo::state_check);
-        let sync_log_file = std::fs::read(SYNC_STATE_PATH.as_path()).unwrap();
-        if !sync_log_file.is_empty() {
-            *self.sync_state.write().unwrap() = serde_json::from_slice(&sync_log_file).unwrap();
+        let sync_state_file = std::fs::read(SYNC_STATE_PATH.as_path()).unwrap();
+        if !sync_state_file.is_empty() {
+            *self.sync_state.write().unwrap() = serde_json::from_slice(&sync_state_file).unwrap();
         }
     }
 

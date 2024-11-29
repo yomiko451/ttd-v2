@@ -111,7 +111,7 @@ fn monitor_broadcast() -> std::io::Result<()> {
                 let server_todo_list = serde_json::from_slice::<Vec<Todo>>(&server_todo_list_raw)?;
                 serde_json::to_writer(todo_list_file, &server_todo_list)?;
                 println!(
-                    "---server--- id: {} new sync state: {} last save at: {}",
+                    "---server--- id: {} current sync state: {} last save at: {}",
                     server_sync_state.id,
                     server_sync_state.last_sync_kind,
                     server_sync_state.last_save_at.format("%Y-%m-%d %H:%M:%S")
