@@ -1,8 +1,7 @@
 use crate::{
-    todo::{Todo, TodoKind, TODAY},
+    todo::{Todo, TodoKind, TodoState},
     SyncKind, SyncState,
 };
-use chrono::Datelike;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -10,8 +9,7 @@ use ratatui::{
     symbols::border::{self, PLAIN},
     text::Line,
     widgets::{
-        canvas::{Canvas, Map, MapResolution},
-        Block, List, ListState, Paragraph, Row, Table, TableState,
+        Block, Paragraph, Row, Table, TableState,
     },
     DefaultTerminal, Frame,
 };
@@ -37,8 +35,7 @@ pub enum InputMode {
 pub struct App {
     pub todo_list: Arc<RwLock<Vec<Todo>>>,
     pub exit: bool,
-    pub tab: AppTab,
-    pub tab_state: ListState,
+    pub app_info: String,
     pub table_state: TableState,
     pub input_buffer: InputBuffer,
     pub input_mode: InputMode,
@@ -46,38 +43,29 @@ pub struct App {
     pub update_cache: Option<String>,
 }
 
-#[derive(Debug, Default, PartialEq, Copy, Clone)]
-pub enum AppTab {
-    #[default]
-    Home,
-    Todo,
-    Sync,
-    About,
-}
-
-impl AppTab {
-    fn get_tab_list() -> Vec<String> {
-        vec![
-            String::from("Home(H)"),
-            String::from("Todo(T)"),
-            String::from("Sync(S)"),
-            String::from("About(A)"),
-        ]
-    }
-}
-
-pub enum Message {
+enum Message {
     Add,
     Delete,
     Save,
-    Update,
-    Filter(TodoKind),
-    FilterReset,
-    TabChange(AppTab),
+    Rewrite,
+    Filter(FilterType),
     InputModeChange(InputMode),
     SelectPrevious,
     SelectNext,
     Quit,
+}
+
+enum FilterType {
+    All,
+    Expired,
+    InProgress,
+    NoDeadline,
+    UpComing,
+    Week,
+    Month,
+    Once,
+    Progress,
+    General
 }
 
 impl App {
@@ -106,37 +94,22 @@ impl App {
             std::fs::File::create(SYNC_STATE_PATH.as_path()).unwrap();
         }
         self.load_todo_list();
-        self.tab_state.select_first();
+        self.app_info = App::get_app_info();
+        self.table_state.select_first();
         self.todo_list.write().unwrap().iter_mut().for_each(Todo::state_check);
         self.sync_data();
     }
     //view方法只负责渲染，尽量不要在这里修改全局数据，启用可变引用只是为了满足状态渲染函数的参数要求
     fn view(&mut self, frame: &mut Frame) {
-        let layout_outter = Layout::default()
+        let layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(1),
                 Constraint::Min(0),
             ])
             .split(frame.area());
-        let layout_inner = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(15), Constraint::Percentage(95)])
-            .split(layout_outter[1]);
-        self.render_msg_bar(frame, layout_outter[0]);
-        self.render_tab_bar(frame, layout_inner[0]);
-        match self.tab {
-            AppTab::Home => {
-                self.render_home_window(frame, layout_inner[1]);
-            }
-            AppTab::Todo => {
-                self.render_todo_window(frame, layout_inner[1]);
-            }
-            AppTab::Sync => {
-                self.render_sync_window(frame, layout_inner[1]);
-            }
-            AppTab::About => {}
-        }
+        self.render_msg_bar(frame, layout[0]);
+        self.render_todo_window(frame, layout[1]);
     }
 
     fn update(&mut self, msg: Message) -> Option<Message> {
@@ -149,17 +122,18 @@ impl App {
                     if let Some(ref created_at) = self.update_cache {
                         self.todo_list.write().unwrap().retain(|todo| todo.created_at != *created_at);
                         self.update_cache = None;
-                        self.table_state.select_last();
                     }
                     self.input_buffer.reset();
+                    self.table_state.select_last();
                 }
                 Some(Message::Save)
             }
             Message::Save => {
-                {let mut sync_state = self.sync_state.write().unwrap();
-                self.todo_list.write().unwrap().iter_mut().for_each(Todo::reset_hidden_flag);
-                sync_state.last_save_at = chrono::Local::now().naive_local();
-                sync_state.last_sync_kind = SyncKind::LocalSave;}
+                {
+                    let mut sync_state = self.sync_state.write().unwrap();
+                    sync_state.last_save_at = chrono::Local::now().naive_local();
+                    sync_state.last_sync_kind = SyncKind::LocalSave;
+                }
                 self.save_todo_list();
                 None
             }
@@ -169,7 +143,7 @@ impl App {
                 }
                 Some(Message::Save)
             }
-            Message::Update => {
+            Message::Rewrite => {
                 if let Some(index) = self.table_state.selected() {
                     let todo: Todo;
                     {let todo_list = self.todo_list.read().unwrap();
@@ -193,20 +167,12 @@ impl App {
                 }
                 None
             }
-            Message::TabChange(tab) => {
-                self.tab = tab;
-                let index = self.tab as usize;
-                self.tab_state.select(Some(index));
-                None
-            }
             Message::InputModeChange(input_mode) => {
                 if input_mode == InputMode::Normal {
                     self.input_buffer.reset();
                     self.update_cache = None;
                 }
-                if self.tab == AppTab::Todo {
-                    self.input_mode = input_mode;
-                }
+                self.input_mode = input_mode;
                 None
             }
             Message::Quit => {
@@ -239,15 +205,78 @@ impl App {
                 }
                 None
             }
-            Message::Filter(todo_kind) => {
-                self.todo_list.write().unwrap().iter_mut().for_each(|todo| {
-                    todo.is_hidden =
-                        !(std::mem::discriminant(&todo_kind) == std::mem::discriminant(&todo.kind));
-                });
-                None
-            }
-            Message::FilterReset => {
-                self.todo_list.write().unwrap().iter_mut().for_each(Todo::reset_hidden_flag);
+            Message::Filter(filter_type) => {
+                let mut todo_lsit = self.todo_list.write().unwrap();
+                match filter_type {
+                    FilterType::All => {
+                        todo_lsit.iter_mut().for_each(Todo::reset_hidden_flag);
+                    },
+                    FilterType::General => {
+                        todo_lsit.iter_mut().for_each(|todo| {
+                            todo.is_hidden = if let TodoKind::General = todo.kind {
+                                 false
+                            } else {
+                                true
+                            };
+                        });
+                    }
+                    FilterType::Week => {
+                        todo_lsit.iter_mut().for_each(|todo| {
+                            todo.is_hidden = if let TodoKind::Week(_) = todo.kind {
+                                 false
+                            } else {
+                                true
+                            };
+                        });
+                    }
+                    FilterType::Month => {
+                        todo_lsit.iter_mut().for_each(|todo| {
+                            todo.is_hidden = if let TodoKind::Month(_) = todo.kind {
+                                 false
+                            } else {
+                                true
+                            };
+                        });
+                    }
+                    FilterType::Once => {
+                        todo_lsit.iter_mut().for_each(|todo| {
+                            todo.is_hidden = if let TodoKind::Once(_) = todo.kind {
+                                 false
+                            } else {
+                                true
+                            };
+                        });
+                    }
+                    FilterType::Progress => {
+                        todo_lsit.iter_mut().for_each(|todo| {
+                            todo.is_hidden = if let TodoKind::Progress(_) = todo.kind {
+                                 false
+                            } else {
+                                true
+                            };
+                        });
+                    }
+                    FilterType::Expired => {
+                        todo_lsit.iter_mut().for_each(|todo| {
+                            todo.is_hidden = !(todo.state == TodoState::Expired);
+                        });
+                    }
+                    FilterType::InProgress => {
+                        todo_lsit.iter_mut().for_each(|todo| {
+                            todo.is_hidden = !(todo.state == TodoState::InProgress);
+                        });
+                    }
+                    FilterType::UpComing=> {
+                        todo_lsit.iter_mut().for_each(|todo| {
+                            todo.is_hidden = !(todo.state == TodoState::UpComing);
+                        });
+                    }
+                    FilterType::NoDeadline => {
+                        todo_lsit.iter_mut().for_each(|todo| {
+                            todo.is_hidden = !(todo.state == TodoState::NoDeadline);
+                        });
+                    }
+                }
                 None
             }
         }
@@ -275,40 +304,43 @@ impl App {
                 Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
                     let msg = match key_event.code {
                         KeyCode::Char('q') => Some(Message::Quit), //TODO 大写也要考虑
-                        KeyCode::Char('t') if self.tab != AppTab::Todo => {
-                            Some(Message::TabChange(AppTab::Todo))
+                        KeyCode::Char('d') => Some(Message::Delete),
+                        KeyCode::Char('g') => {
+                            Some(Message::Filter(FilterType::General))
                         }
-                        KeyCode::Char('h') if self.tab != AppTab::Home => {
-                            Some(Message::TabChange(AppTab::Home))
+                        KeyCode::Char('w') => {
+                            Some(Message::Filter(FilterType::Week))
                         }
-                        KeyCode::Char('s') if self.tab != AppTab::Sync => {
-                            Some(Message::TabChange(AppTab::Sync))
+                        KeyCode::Char('m') => {
+                            Some(Message::Filter(FilterType::Month))
                         }
-                        KeyCode::Char('d') if self.tab == AppTab::Todo => Some(Message::Delete),
-                        KeyCode::Char('g') if self.tab == AppTab::Todo => {
-                            Some(Message::Filter(TodoKind::General))
+                        KeyCode::Char('o') => {
+                            Some(Message::Filter(FilterType::Once))
                         }
-                        KeyCode::Char('w') if self.tab == AppTab::Todo => {
-                            Some(Message::Filter(TodoKind::Week(TODAY.weekday())))
+                        KeyCode::Char('p') => {
+                            Some(Message::Filter(FilterType::Progress))
                         }
-                        KeyCode::Char('m') if self.tab == AppTab::Todo => {
-                            Some(Message::Filter(TodoKind::Month(TODAY.day())))
+                        KeyCode::Char('a') => {
+                            Some(Message::Filter(FilterType::All))
                         }
-                        KeyCode::Char('o') if self.tab == AppTab::Todo => {
-                            Some(Message::Filter(TodoKind::Once(TODAY.date())))
+                        KeyCode::Char('i') => {
+                            Some(Message::Filter(FilterType::InProgress))
                         }
-                        KeyCode::Char('p') if self.tab == AppTab::Todo => {
-                            Some(Message::Filter(TodoKind::Progress(String::default())))
+                        KeyCode::Char('e') => {
+                            Some(Message::Filter(FilterType::Expired))
                         }
-                        KeyCode::Char('r') if self.tab == AppTab::Todo => {
-                            Some(Message::FilterReset)
+                        KeyCode::Char('u') => {
+                            Some(Message::Filter(FilterType::UpComing))
                         }
-                        KeyCode::Char('u') if self.tab == AppTab::Todo => Some(Message::Update),
-                        KeyCode::Char('i') if self.tab == AppTab::Todo => {
+                        KeyCode::Char('n') => {
+                            Some(Message::Filter(FilterType::NoDeadline))
+                        }
+                        KeyCode::Char('r') => Some(Message::Rewrite),
+                        KeyCode::Enter if self.input_mode != InputMode::Insert => {
                             Some(Message::InputModeChange(InputMode::Insert))
                         }
-                        KeyCode::Up if self.tab == AppTab::Todo => Some(Message::SelectPrevious),
-                        KeyCode::Down if self.tab == AppTab::Todo => Some(Message::SelectNext),
+                        KeyCode::Up => Some(Message::SelectPrevious),
+                        KeyCode::Down => Some(Message::SelectNext),
                         _ => None,
                     };
                     return Ok(msg);
@@ -322,46 +354,13 @@ impl App {
     fn render_msg_bar(&mut self, frame: &mut Frame, rect: Rect) {
         let sync_state = self.sync_state.read().unwrap();
         let msg = Line::from(vec![
-            "hi! today is a nice day!".into(),
+            (&self.app_info).into(),
             " | ".into(),
             format!("last save at: {}", sync_state.last_save_at.format("%Y-%m-%d %H:%M:%S")).into(),
             " | ".into(),
             format!("currnet sync state: {}", sync_state.last_sync_kind).into()
         ]).centered();
         frame.render_widget(msg, rect);
-    }
-    fn render_tab_bar(&mut self, frame: &mut Frame, rect: Rect) {
-        let title = Line::from(" Tab ").bold();
-        let block = Block::bordered()
-            .title(title.centered())
-            .title_bottom(Line::from(" Quit <q> ").centered())
-            .border_set(border::PLAIN);
-        let list = AppTab::get_tab_list()
-            .into_iter()
-            .map(|tab| Line::from(tab))
-            .collect::<List>()
-            .highlight_style(Style::new().italic().cyan())
-            .highlight_symbol(" >> ")
-            .block(block);
-        frame.render_stateful_widget(list, rect, &mut self.tab_state);
-    }
-    fn render_home_window(&self, frame: &mut Frame, rect: Rect) {
-        let title = Line::from(" Home ").bold();
-        let block = Block::bordered()
-            .title(title.centered())
-            .border_set(border::PLAIN);
-        let canvas = Canvas::default()
-            .block(block)
-            .x_bounds([-180.0, 180.0])
-            .y_bounds([-90.0, 90.0])
-            .paint(|ctx| {
-                ctx.draw(&Map {
-                    resolution: MapResolution::High,
-                    color: Color::default(),
-                });
-                //ctx.layer(); TODO 继续画记得先保存当前状态
-            });
-        frame.render_widget(canvas, rect);
     }
     fn render_todo_window(&mut self, frame: &mut Frame, rect: Rect) {
         let layout = Layout::default()
@@ -405,8 +404,8 @@ impl App {
                     " Next <Down>".into(),
                     " Previous <Up>".into(),
                     " Delete <d>".into(),
-                    " Update <u> ".into(),
-                    " Filter <g, w, m, o, p, r> ".into(),
+                    " Rewrite <r> ".into(),
+                    " Filter <first letter of Kind and State label , all: a> ".into(),
                 ])
                 .centered(),
             )
@@ -439,25 +438,22 @@ impl App {
                     "Filtered: {}",
                     todo_list.iter().filter(|todo| !todo.is_hidden).count()
                 )
-            ]))
+            ]).top_margin(1))
             .row_highlight_style(Style::new().reversed())
             .widths([
                 Constraint::Percentage(10),
-                Constraint::Percentage(35),
-                Constraint::Percentage(20),
+                Constraint::Percentage(45),
                 Constraint::Percentage(15),
+                Constraint::Percentage(10),
                 Constraint::Percentage(20),
             ])
             .block(table_block); //TODO 文本多行显示
         frame.render_stateful_widget(table, layout[1], &mut self.table_state);
     }
-
-    fn render_sync_window(&mut self, frame: &mut Frame, rect: Rect) {
-        let p = Paragraph::new(format!("{}", self.sync_state.read().unwrap().last_save_at))
-            .block(Block::bordered().border_set(border::PLAIN));
-        frame.render_widget(p, rect);
-    }
     fn save_todo_list(&mut self) {
+        {
+            self.todo_list.write().unwrap().iter_mut().for_each(Todo::reset_hidden_flag);
+        }
         let todo_list_file = std::fs::File::create(TODO_LIST_PATH.as_path()).unwrap();
         let sync_state_file = std::fs::File::create(SYNC_STATE_PATH.as_path()).unwrap();
         serde_json::to_writer(todo_list_file, &self.todo_list.read().unwrap().clone()).unwrap();
@@ -484,11 +480,16 @@ impl App {
             Ok(Some((server_sync_state, server_todo_list))) => {
                 *sync_state.write().unwrap() = server_sync_state; 
                 *todo_list.write().unwrap() = server_todo_list; 
-                //self.save_todo_list();  TODO
             }
             _ => {}
         }); 
 
         
+    }
+
+    fn get_app_info() -> String {
+        let name = env!("CARGO_PKG_NAME");
+        let version = env!("CARGO_PKG_VERSION");
+        format!("{} v{}", name, version)
     }
 }

@@ -8,11 +8,12 @@ use std::{
 use ttd_v2::{SyncKind, SyncState, Todo};
 
 static CURRENT_PATH: LazyLock<PathBuf> = LazyLock::new(|| std::env::current_dir().unwrap());
+
 static SERVER_SYNC_STATE_PATH: LazyLock<PathBuf> =
     LazyLock::new(|| CURRENT_PATH.join("server_sync_state.json"));
-static SERVER_TODO_LIST_PATH: LazyLock<PathBuf> = LazyLock::new(
-    || CURRENT_PATH.join("server_todo_list.json"), //TODO改名字
-);
+
+static SERVER_TODO_LIST_PATH: LazyLock<PathBuf> = 
+    LazyLock::new(|| CURRENT_PATH.join("server_todo_list.json"));
 
 fn main() {
     init().unwrap();

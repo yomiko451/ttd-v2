@@ -13,11 +13,11 @@ pub struct Todo {
     pub is_hidden: bool,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize, Clone)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq)]
 pub enum TodoState {
     #[default]
-    Indefinite,
-    OnGoing,
+    NoDeadline,
+    InProgress,
     UpComing,
     Expired,
 }
@@ -25,8 +25,8 @@ pub enum TodoState {
 impl TodoState {
     pub fn print_info(&self) -> String {
         match self {
-            TodoState::Indefinite => "Indefinite".to_string(),
-            TodoState::OnGoing => "OnGoing".to_string(),
+            TodoState::NoDeadline => "NoDeadline".to_string(),
+            TodoState::InProgress => "InProgress".to_string(),
             TodoState::UpComing => "UpComing".to_string(),
             TodoState::Expired => "Expired".to_string(),
         }
@@ -47,7 +47,7 @@ impl TodoKind {
     pub fn print_info(&self) -> String {
         match self {
             TodoKind::General => "General".to_string(),
-            TodoKind::Progress(s) => format!("Progress: {}", s),
+            TodoKind::Progress(s) => format!("Prog: {}", s),
             TodoKind::Week(w) => format!("Week: {}", w),
             TodoKind::Month(m) => format!("Month: {}", m),
             TodoKind::Once(d) => format!("Once: {}", d),
@@ -111,7 +111,7 @@ impl Todo {
         match self.kind {
             TodoKind::Once(date) => {
                 if date == TODAY.date() {
-                    self.state = TodoState::OnGoing;
+                    self.state = TodoState::InProgress;
                 } else if date < TODAY.date() {
                     self.state = TodoState::Expired;
                 } else {
@@ -120,14 +120,14 @@ impl Todo {
             }
             TodoKind::Week(weekday) => {
                 if weekday == TODAY.weekday() {
-                    self.state = TodoState::OnGoing;
+                    self.state = TodoState::InProgress;
                 } else {
                     self.state = TodoState::UpComing;
                 }
             }
             TodoKind::Month(day) => {
                 if day == TODAY.day() {
-                    self.state = TodoState::OnGoing;
+                    self.state = TodoState::InProgress;
                 } else {
                     self.state = TodoState::UpComing;
                 }
