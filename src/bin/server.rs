@@ -5,14 +5,14 @@ use std::{
     path::PathBuf,
     sync::LazyLock,
 };
-use ttd_v2::{SyncKind, SyncState, Todo};
+use ttd_v2::{SyncState, Todo};
 
 static CURRENT_PATH: LazyLock<PathBuf> = LazyLock::new(|| std::env::current_dir().unwrap());
 
 static SERVER_SYNC_STATE_PATH: LazyLock<PathBuf> =
     LazyLock::new(|| CURRENT_PATH.join("server_sync_state.json"));
 
-static SERVER_TODO_LIST_PATH: LazyLock<PathBuf> = 
+static SERVER_TODO_LIST_PATH: LazyLock<PathBuf> =
     LazyLock::new(|| CURRENT_PATH.join("server_todo_list.json"));
 
 fn main() {
@@ -59,10 +59,9 @@ fn monitor_broadcast() -> std::io::Result<()> {
                 let sync_state = serde_json::from_slice::<SyncState>(&sync_state_raw)?;
                 println!("sync start!");
                 println!(
-                    "---local--- id: {} last sync state: {} last save at: {}",
-                    sync_state.id,
-                    sync_state.last_sync_kind,
-                    sync_state.last_save_at.format("%Y-%m-%d %H:%M:%S")
+                    "---local--- last save at: {} last sync at: {}",
+                    sync_state.last_save_at.format("%Y-%m-%d %H:%M:%S"),
+                    sync_state.last_sync_at.format("%Y-%m-%d %H:%M:%S")
                 );
                 let mut server_sync_state =
                     if server_sync_state_raw.is_empty() | server_todo_list_raw.is_empty() {
@@ -71,51 +70,33 @@ fn monitor_broadcast() -> std::io::Result<()> {
                         serde_json::from_slice::<SyncState>(&server_sync_state_raw)?
                     };
                 println!(
-                    "---server--- id: {} last sync state: {} last save at: {}",
-                    server_sync_state.id,
-                    server_sync_state.last_sync_kind,
-                    server_sync_state.last_save_at.format("%Y-%m-%d %H:%M:%S")
+                    "---server--- last save at: {} last sync at: {}",
+                    server_sync_state.last_save_at.format("%Y-%m-%d %H:%M:%S"),
+                    server_sync_state.last_sync_at.format("%Y-%m-%d %H:%M:%S")
                 );
-                if (server_sync_state.last_sync_kind == SyncKind::Init)
-                    && (sync_state.last_sync_kind == SyncKind::Init)
-                {
-                    stream.write_all(b"synced")?;
-                    stream.shutdown(std::net::Shutdown::Both)?;
-                    println!("init! there is no data to sync!");
-                    break;
-                } else if server_sync_state.last_save_at == sync_state.last_save_at {
-                    stream.write_all(b"synced")?;
-                    stream.shutdown(std::net::Shutdown::Both)?;
-                    println!("same data! there is no need to sync!");
-                    break;
-                } else if (server_sync_state.last_save_at < sync_state.last_save_at)
-                    || (server_sync_state.last_sync_kind == SyncKind::Init)
-                {
+                if server_sync_state.last_save_at <= sync_state.last_save_at {
                     server_sync_state = sync_state;
-                    server_sync_state.last_sync_kind = SyncKind::UploadToServer;
                     server_todo_list_raw = todo_list_raw.into();
                     stream.write_all(b"synced")?;
                     stream.shutdown(std::net::Shutdown::Both)?;
-                    println!("{}", "upload success!".green());
                 } else {
-                    server_sync_state.last_sync_kind = SyncKind::DownloadFromServer;
+                    server_sync_state.last_sync_at = chrono::Local::now().naive_local();
                     server_sync_state_raw = serde_json::to_vec(&server_sync_state)?;
                     stream.write_all(&server_todo_list_raw)?;
                     stream.write_all(b"----")?;
                     stream.write_all(&server_sync_state_raw)?;
                     stream.shutdown(std::net::Shutdown::Both)?;
-                    println!("{}", "download success!".green());
                 }
                 let sync_log_file = std::fs::File::create(SERVER_SYNC_STATE_PATH.as_path())?;
                 serde_json::to_writer(sync_log_file, &server_sync_state)?;
                 let todo_list_file = std::fs::File::create(SERVER_TODO_LIST_PATH.as_path())?;
                 let server_todo_list = serde_json::from_slice::<Vec<Todo>>(&server_todo_list_raw)?;
                 serde_json::to_writer(todo_list_file, &server_todo_list)?;
+                println!("{}", "sync success!".green());
                 println!(
-                    "---server--- id: {} current sync state: {} last save at: {}",
-                    server_sync_state.id,
-                    server_sync_state.last_sync_kind,
-                    server_sync_state.last_save_at.format("%Y-%m-%d %H:%M:%S")
+                    "---server--- last save at: {} last sync at: {}",
+                    server_sync_state.last_save_at.format("%Y-%m-%d %H:%M:%S"),
+                    server_sync_state.last_sync_at.format("%Y-%m-%d %H:%M:%S")
                 );
                 break;
             }

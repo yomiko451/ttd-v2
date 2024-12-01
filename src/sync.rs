@@ -1,7 +1,6 @@
 use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
 use std::{
-    fmt::Display,
     io::{self, Read, Write},
     net::{TcpStream, UdpSocket},
     time::{self, Duration},
@@ -11,34 +10,22 @@ use crate::todo::Todo;
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct SyncState {
-    pub id: String,
-    pub last_sync_kind: SyncKind,
+    pub last_sync_at: NaiveDateTime,
     pub last_save_at: NaiveDateTime,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize, PartialEq, Clone)]
-pub enum SyncKind {
+pub enum SyncAction {
     //TODO
     #[default]
     Init,
-    LocalSave,
-    UploadToServer,
-    DownloadFromServer,
-}
-
-impl Display for SyncKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SyncKind::UploadToServer => write!(f, "ToServer"),
-            SyncKind::DownloadFromServer => write!(f, "FromServer"),
-            SyncKind::LocalSave => write!(f, "LocalSave"),
-            SyncKind::Init => write!(f, "Init"),
-        }
-    }
+    NoChange,
+    Upload,
+    Download,
 }
 
 pub fn sync_app_data(
-    local_sync_state: SyncState,
+    mut local_sync_state: SyncState,
     local_todo_list: Vec<Todo>,
 ) -> io::Result<Option<(SyncState, Vec<Todo>)>> {
     let socket = UdpSocket::bind("0.0.0.0:0")?;
@@ -68,13 +55,13 @@ pub fn sync_app_data(
                         data.extend_from_slice(&buf[..amt]);
                     }
                     if &data[..6] == b"synced" {
-                        return Ok(None);
+                        local_sync_state.last_sync_at = chrono::Local::now().naive_local();
+                        return Ok(Some((local_sync_state, local_todo_list)));
                     } else {
                         let index = data.windows(4).position(|sep| sep == b"----").unwrap();
                         let sync_state_raw = &data.split_off(index + 4);
                         let todo_list_raw = &data[..index];
-                        let mut sync_state = serde_json::from_slice::<SyncState>(&sync_state_raw)?;
-                        sync_state.last_sync_kind = SyncKind::DownloadFromServer;
+                        let sync_state = serde_json::from_slice::<SyncState>(&sync_state_raw)?;
                         let todo_list = serde_json::from_slice::<Vec<Todo>>(&todo_list_raw)?;
                         return Ok(Some((sync_state, todo_list)));
                     }
