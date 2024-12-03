@@ -98,7 +98,6 @@ impl App {
         }
         self.load_todo_list();
         self.app_info = App::get_app_info();
-        self.table_state.select_first();
         self.todo_list
             .write()
             .unwrap()
@@ -401,11 +400,12 @@ impl App {
             .title(Line::from(" TodoList ").bold().centered())
             .title_bottom(
                 Line::from(vec![
-                    " Next <Down>".into(),
-                    " Previous <Up>".into(),
+                    " Next <↓>".into(),
+                    " Previous <↑>".into(),
                     " Delete <d>".into(),
                     " Rewrite <r> ".into(),
-                    " Filter <first letter of Kind and State label , all: a> ".into(),
+                    " Sync <s>".into(),
+                    " Filter <w/m/o/p/g/i/u/e/n/a> ".into(),
                 ])
                 .centered(),
             )
