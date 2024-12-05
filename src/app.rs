@@ -18,13 +18,18 @@ use std::{
 };
 use tui_input::{backend::crossterm::EventHandler, Input as InputBuffer};
 
-pub static CURRENT_PATH: LazyLock<PathBuf> = LazyLock::new(|| std::env::current_dir().unwrap());
+pub static CURRENT_PATH: LazyLock<PathBuf> = LazyLock::new(|| {
+    match dirs::data_local_dir() {
+        Some(path) => path.join(env!("CARGO_PKG_NAME")),
+        None => std::env::current_dir().unwrap().join(env!("CARGO_PKG_NAME"))
+    }
+});
 
 pub static TODO_LIST_PATH: LazyLock<PathBuf> =
     LazyLock::new(|| CURRENT_PATH.join("todo_list.json"));
 
 pub static SYNC_STATE_PATH: LazyLock<PathBuf> =
-    LazyLock::new(|| std::env::current_dir().unwrap().join("sync_state.json"));
+    LazyLock::new(|| CURRENT_PATH.join("sync_state.json"));
 
 #[derive(Debug, Default, PartialEq)]
 pub enum InputMode {
@@ -90,6 +95,9 @@ impl App {
     }
 
     fn init(&mut self) {
+        if !CURRENT_PATH.exists() {
+            std::fs::create_dir(CURRENT_PATH.as_path()).unwrap();
+        }
         if !TODO_LIST_PATH.exists() {
             std::fs::File::create(TODO_LIST_PATH.as_path()).unwrap();
         }
@@ -403,7 +411,7 @@ impl App {
                     " Next <↓>".into(),
                     " Previous <↑>".into(),
                     " Delete <d>".into(),
-                    " Rewrite <r> ".into(),
+                    " Rewrite <r>".into(),
                     " Sync <s>".into(),
                     " Filter <w/m/o/p/g/i/u/e/n/a> ".into(),
                 ])

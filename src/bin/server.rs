@@ -5,9 +5,7 @@ use std::{
     path::PathBuf,
     sync::LazyLock,
 };
-use ttd_v2::{SyncState, Todo};
-
-static CURRENT_PATH: LazyLock<PathBuf> = LazyLock::new(|| std::env::current_dir().unwrap());
+use ttd_v2::{SyncState, Todo, CURRENT_PATH};
 
 static SERVER_SYNC_STATE_PATH: LazyLock<PathBuf> =
     LazyLock::new(|| CURRENT_PATH.join("server_sync_state.json"));
@@ -21,6 +19,9 @@ fn main() {
 }
 
 fn init() -> std::io::Result<()> {
+    if !CURRENT_PATH.exists() {
+        std::fs::create_dir(CURRENT_PATH.as_path()).unwrap();
+    }
     if !SERVER_SYNC_STATE_PATH.exists() {
         std::fs::File::create(SERVER_SYNC_STATE_PATH.as_path())?;
     }

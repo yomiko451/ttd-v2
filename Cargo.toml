@@ -1,11 +1,12 @@
 [package]
 name = "ttd-v2"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 
 [dependencies]
 chrono = { version="0.4.38", features=["serde"] }
 crossterm = "0.28.1"
+dirs = "5.0.1"
 ratatui = "0.29.0"
 serde = { version="1.0.215", features=["derive"] }
 serde_json = "1.0.133"

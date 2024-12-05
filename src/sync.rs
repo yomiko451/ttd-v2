@@ -39,6 +39,7 @@ pub fn sync_app_data(
             Ok((amt, src)) => {
                 if &buf[..amt] == b"lily" {
                     let mut stream = TcpStream::connect(src)?;
+                    local_sync_state.last_sync_at = chrono::Local::now().naive_local();
                     let local_todo_list_raw = serde_json::to_vec(&local_todo_list)?;
                     let local_sync_state_raw = serde_json::to_vec(&local_sync_state)?;
                     stream.write_all(&local_todo_list_raw)?;
@@ -55,7 +56,6 @@ pub fn sync_app_data(
                         data.extend_from_slice(&buf[..amt]);
                     }
                     if &data[..6] == b"synced" {
-                        local_sync_state.last_sync_at = chrono::Local::now().naive_local();
                         return Ok(Some((local_sync_state, local_todo_list)));
                     } else {
                         let index = data.windows(4).position(|sep| sep == b"----").unwrap();
